@@ -1,0 +1,11 @@
+{
+  "name": "powerpuff",
+  "version": "0.1.0",
+  "description": "Spec in the evening, code overnight, audit cards in the morning: a script orchestrates, a strong model audits and accepts, a cheap model writes; frozen acceptance tests and a deterministic done-check",
+  "author": {
+    "name": "Kirill Su",
+    "url": "https://github.com/KirillMaster"
+  },
+  "license": "MIT",
+  "keywords": ["agentic-development", "unattended", "acceptance-tests", "spec-driven", "night-run"]
+}

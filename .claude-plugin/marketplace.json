@@ -1,0 +1,15 @@
+{
+  "name": "powerpuff",
+  "owner": {
+    "name": "Kirill Su",
+    "url": "https://github.com/KirillMaster"
+  },
+  "plugins": [
+    {
+      "name": "powerpuff",
+      "source": "./",
+      "version": "0.1.0",
+      "description": "Spec in the evening, code overnight, audit cards in the morning"
+    }
+  ]
+}
