@@ -5,6 +5,8 @@ branch); a failed or blocked unit never stops the run. State: <repo>/.powerpuff/
 
 Usage: python queue_run.py <queue.yaml> [--repo .] [--no-wait] [--only U1,U2] [--dry-run] [--attended]
   --no-wait   on a rate limit stop the run with exit 3 (state saved) instead of sleeping
+  --max-outage-min  forge paused on an unreachable API (exit 3): wait 30 s, 60 s, ... <=15 min and rerun the unit;
+              after N minutes in total (or with --no-wait at once) stop with exit 3, the unit stays `running`
   --dry-run   validate and print the execution order and the budget split, create nothing
   --attended  stop after every unit with exit 4 and `QUEUE: paused after <unit>`; re-run continues
 Exit: 0 done, 1 failed, 2 partial, 3 config error / rate limit with --no-wait, 4 attended pause. Last line `QUEUE: ...`.
@@ -238,6 +240,7 @@ class Queue:
         self.wt_root = self.run_dir / "wt"
         self.state_path = self.run_dir / "state.json"
         self.t0 = time.monotonic()
+        self.outage = forge_run.Outage(getattr(a, "max_outage_min", 120))
         self.st: dict = {}
         self.selected = [u["id"] for u in cfg["units"] if self.only is None or u["id"] in self.only]
 
@@ -462,6 +465,8 @@ class Queue:
             rc, out = self.run_forge(uid, wt, spec)
             self.sync_cost(uid, wt)
             self.save()
+            if rc in (0, 1):
+                self.outage.healthy()
             if rc == 0:
                 v["finished"] = now_iso()
                 self.snapshot(uid, wt)
@@ -478,6 +483,16 @@ class Queue:
                 self.say(f"{uid} {v['status']}: {v['reason']}")
                 self.save()
                 return "ok"
+            if rc == 3 and forge_run.API_PAUSE in out:
+                wait = None if self.a.no_wait else self.outage.next_wait(self.remaining_s())
+                if wait is None:
+                    v["reason"] = "API unreachable"
+                    self.say(f"{uid} API unreachable, stopping")
+                    self.save()
+                    return "rate"
+                self.say(f"{uid} API unreachable, retry in {wait:.0f} s (attempt {self.outage.attempt})")
+                sleep(wait)
+                continue
             if rc == 3:
                 if self.a.no_wait:
                     v["reason"] = "rate limit"
@@ -714,6 +729,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("queue")
     ap.add_argument("--repo", default=".")
     ap.add_argument("--no-wait", action="store_true")
+    ap.add_argument("--max-outage-min", type=float, default=120, help="total wait for an unreachable API before stopping")
     ap.add_argument("--only", default="")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--attended", action="store_true")

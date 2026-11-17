@@ -28,4 +28,11 @@ What the driver does (every stage is one `claude -p` session, the script checks 
 | accept | `--model`, fresh context | `.forge/gaps.json`; gaps → ≤2 fix rounds |
 | report | script | `.forge/REPORT.md` (line `gates:` says whether the gates are approved; line `guard:`), `FORGE: done|failed` |
 
+Flags and exit codes of the driver:
+| Flag / exit | Meaning |
+|---|---|
+| `--no-wait` | rate limit → emit the result and exit 3 instead of sleeping; API unreachable → exit 3 at once |
+| `--max-outage-min N` (120) | API unreachable (network, 5xx): wait 30 s, 60 s, … ≤15 min per step, a try is not spent and the stage does not advance; after N minutes in total (or when `--max-hours` runs out) `FORGE: paused (API unreachable)`, exit 3, state unchanged, REPORT.md says it is NOT a verdict about the code; rerun continues. With `--stream` the result event carries `forge_outcome: "paused-api"` |
+| exit 0 / 1 / 3 | `FORGE: done` / `FORGE: failed` / rate limit or API pause, resumable |
+
 Gates: a missing tool fails the gate; edits of `.forge/gates.json` / `powerpuff.yaml` during a run are reverted and fail the check. A draft gate set stays "NOT APPROVED" until the user saves `.forge/powerpuff.draft.yaml` as `powerpuff.yaml` (set `approved: true`).

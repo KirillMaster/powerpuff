@@ -6,7 +6,7 @@ Scenario: {"stages": {"<stage>": [entry, ...]}}; call N of a stage uses entry N 
 or entry "default" = the stage's happy-path behaviour. Entry keys:
   base (bool)  start from the stage default writes/appends, `write`/`append` overlay them
   write {path: text}, append {path: text}, delete [path]
-  result       ok (default) | rate_limit | is_error | no_result      epoch (rate_limit), text, cost, exit_code
+  result       ok (default) | rate_limit | is_error | no_result | api_error      epoch (rate_limit), text, cost, exit_code
   kill_driver  terminate the driver process, then exit without a result event
 Stages are recognised by the first line of the prompt: audit tests topup vacuous implement fix accept gapfix retry.
 """
@@ -109,6 +109,14 @@ def main() -> int:
           flush=True)
     if kind == "no_result":
         return int(entry.get("exit_code", 0))
+    if kind == "api_error":
+        err = "API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)"
+        print(json.dumps({"type": "assistant", "error": "server_error", "is_api_error_message": True,
+                          "message": {"content": [{"type": "text", "text": err}]}}), flush=True)
+        print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "api_error": "connection_failed",
+                          "terminal_reason": "api_error", "result": err, "total_cost_usd": 0, "num_turns": 1,
+                          "session_id": sid}), flush=True)
+        return int(entry.get("exit_code", 1))
     is_error = kind in ("rate_limit", "is_error")
     text = entry.get("text", "done")
     if kind == "rate_limit":

@@ -264,7 +264,8 @@ def render(projects: list[Project], draft: dict) -> str:
              f"# Найдено: {where}", "approved: false", f"stack: {stacks[0] if len(stacks) == 1 else 'mixed'}", "gates:"]
     for tier in TIERS:
         if draft["gates"][tier]:
-            lines.append(f"  {tier}: [{', '.join(yq(g) if not re.fullmatch(r'[\w-]+', g) else g for g in draft['gates'][tier])}]")
+            names = ", ".join(g if re.fullmatch(r"[\w-]+", g) else yq(g) for g in draft["gates"][tier])
+            lines.append(f"  {tier}: [{names}]")
     lines.append("commands:")
     lines += [f"  {key(g)}: {yq(c)}" for g, c in draft["commands"].items()]
     if draft["format_fix"]:

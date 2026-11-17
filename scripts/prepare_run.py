@@ -12,7 +12,9 @@ Stages (state in <repo>/.powerpuff/prepare/<slug>/state.json, resumable per stag
 Usage: python prepare_run.py <spec-dir|spec-file|"idea text"> [--repo .] [--model opus] [--out queue.yaml]
        [--max-unit-lines 200] [--max-usd 5] [--no-wait] [--answers questions.json] [--assume-defaults]
        [--accept-lint] [--skip-base-check] [--dry-run]
-Exit: 0 ready, 1 failed, 3 rate limit with --no-wait, 4 needs answers.
+       [--max-outage-min 120]
+Exit: 0 ready, 1 failed, 3 rate limit with --no-wait or API unreachable (backoff 30 s .. 15 min, up to
+--max-outage-min in total; resumable), 4 needs answers.
 """
 
 import argparse
@@ -154,6 +156,7 @@ class Prepare:
         self.state = json.loads(self.state_path.read_text(encoding="utf-8")) if self.state_path.is_file() else {}
         self.state.setdefault("cost", {"total_usd": 0.0, "by_model": {}, "by_stage": {}, "sessions": 0, "turns": 0})
         self.state.setdefault("slug", self.slug)
+        self.outage = forge_run.Outage(getattr(a, "max_outage_min", 120))
 
     # ---- plumbing ---------------------------------------------------------------------------------
     def log(self, msg: str) -> None:
@@ -219,13 +222,15 @@ class Prepare:
         assert proc.stdin and proc.stdout
         proc.stdin.write(prompt)
         proc.stdin.close()
-        result, tail = None, []
+        result, tail, api_msg = None, [], False
         for line in proc.stdout:
             try:
                 ev = json.loads(line)
             except ValueError:
                 tail = (tail + [line.strip()])[-20:]
                 continue
+            if isinstance(ev, dict) and ev.get("type") == "assistant" and ev.get("is_api_error_message"):
+                api_msg = True
             if isinstance(ev, dict) and ev.get("type") == "result":
                 result = ev
         proc.wait()
@@ -241,9 +246,12 @@ class Prepare:
         self.save()
         raw = r.get("result")
         text: str = raw if isinstance(raw, str) else ""
-        low = (text + "\n" + "\n".join(tail)).lower()
-        if (not result or r.get("is_error")) and any(p in low for p in forge_run.RATE):
+        kind = forge_run.failure_kind(result, text, tail, api_msg)
+        if kind == "rate":
             raise forge_run.RateLimited(text + "\n" + "\n".join(tail))
+        if kind == "api":
+            raise forge_run.ApiUnreachable(text + "\n" + "\n".join(tail))
+        self.outage.healthy()
         ok = bool(result) and not r.get("is_error")
         self.log(f"{stage}: session end ok={ok} cost={spent:.2f}"
                  + ("" if ok else " error=" + " ".join(text.split())[:200] + " tail=" + " | ".join(tail[-3:])[:300]))
@@ -263,6 +271,14 @@ class Prepare:
                 self.log(f"{stage}: rate limited, sleeping {wait / 60:.0f} min")
                 time.sleep(wait)
                 continue  # a rate limit does not consume a try
+            except forge_run.ApiUnreachable:
+                wait = None if self.a.no_wait else self.outage.next_wait()
+                if wait is None:
+                    print("PREPARE: paused (API unreachable, rerun to resume)", flush=True)
+                    raise Stop(3) from None
+                self.log(f"{stage}: API unreachable, retry in {wait:.0f} s (attempt {self.outage.attempt})")
+                time.sleep(wait)
+                continue  # an API outage does not consume a try either
             left -= 1
             if out["ok"]:
                 return out["text"]
@@ -584,6 +600,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-unit-lines", type=int, default=200)
     ap.add_argument("--max-usd", type=float, default=5, help="cumulative notional budget of the preparation")
     ap.add_argument("--no-wait", action="store_true")
+    ap.add_argument("--max-outage-min", type=float, default=120, help="total wait for an unreachable API before pausing")
     ap.add_argument("--answers", default="", help="questions.json with filled `answer` fields")
     ap.add_argument("--assume-defaults", action="store_true", help="defaults for unanswered blocking questions")
     ap.add_argument("--accept-lint", action="store_true", help="continue despite spec lint errors")

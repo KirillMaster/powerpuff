@@ -13,6 +13,8 @@ Usage: python forge_run.py <spec-dir|spec-file|ticket text> [--repo .] [--model 
        [--max-hours 8] [--max-usd 60] [--preflight] [--stream] [--no-wait] [--allow-red-base] [--assume-defaults]
   --stream   re-emit the sessions' stream-json on stdout and finish with one synthetic `result` event (bob-bench)
   --no-wait  on a rate limit emit the result and exit 3 instead of sleeping (the caller pauses and re-invokes)
+  --max-outage-min  API unreachable (network/5xx): wait 30 s, 60 s, ... <=15 min per step without spending a try;
+             after N minutes in total (or with --no-wait at once) `FORGE: paused (API unreachable)`, exit 3, resumable
   --allow-red-base   continue when gates are red on the untouched base tree (default: failed, no session is spent)
   --assume-defaults  use the auditor's defaults for unanswered `blocking` questions (.forge/questions.json)
   --final    after green acceptance run the profile tier `final` once (red: `final gates red: <names>`, resumable);
@@ -42,6 +44,11 @@ import gate_guard  # noqa: E402
 PROFILE_FILES = ("powerpuff.yaml", "powerpuff.gates.json")
 DRAFT_NOTE = "NOT APPROVED (chosen by the model; review .forge/powerpuff.draft.yaml and save it as powerpuff.yaml)"
 RATE = ("usage limit", "rate limit", "429", "overloaded")
+API_PAUSE = "FORGE: paused (API unreachable)"
+API_TEXT = ("can't reach the api server", "connection_failed", "enotfound", "econnreset", "etimedout", "eai_again")
+API_5XX = re.compile(r"\b(?:api error|http|status)\W{0,3}5\d\d\b|\b5\d\d (?:internal server|bad gateway|service unavailable"
+                     r"|gateway time)", re.IGNORECASE)
+BACKOFF_START_S, BACKOFF_CAP_S = 30, 900
 EPOCH = re.compile(r"\|\s*(\d{10})\b")
 CLOCK = re.compile(r"\bresets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b", re.IGNORECASE)
 SPEC_FILES = ("spec.yaml", "spec.md", "plan.yaml", "plan.md", "tasks.yaml", "tasks.md", "contracts.yaml",
@@ -247,6 +254,54 @@ class RateLimited(Exception):
         self.text = text
 
 
+class ApiUnreachable(Exception):
+    """A session that ended on a transport/server error of the API: no model work was done, the code is not judged."""
+
+    def __init__(self, text: str):
+        super().__init__(text)
+        self.text = text
+
+
+def failure_kind(result: dict | None, text: str, tail: list[str], api_msg: bool = False) -> str | None:
+    """`rate` | `api` | None for a session that ended without a normal result. Structured fields first, text as
+    fallback; a rate limit wins when both match."""
+    if result and not result.get("is_error"):
+        return None
+    low = (text + "\n" + "\n".join(tail)).lower()
+    if any(p in low for p in RATE):
+        return "rate"
+    r = result or {}
+    if r.get("api_error") or r.get("terminal_reason") == "api_error" or api_msg \
+            or any(p in low for p in API_TEXT) or API_5XX.search(low):
+        return "api"
+    return None
+
+
+def backoff_s(attempt: int) -> float:
+    return float(min(BACKOFF_START_S * 2 ** max(attempt - 1, 0), BACKOFF_CAP_S))
+
+
+class Outage:
+    """Backoff bookkeeping for API outages: pauses grow 30 s, 60 s, ... up to 15 min, the sum is bounded."""
+
+    def __init__(self, max_min: float):
+        self.max_s = max_min * 60
+        self.waited = 0.0
+        self.attempt = 0
+
+    def next_wait(self, remaining_s: float = float("inf")) -> float | None:
+        """Seconds to sleep before the next attempt; None when the outage limit or `remaining_s` is spent."""
+        self.attempt += 1
+        wait = min(backoff_s(self.attempt), self.max_s - self.waited, remaining_s)
+        if wait <= 0:
+            return None
+        self.waited += wait
+        return wait
+
+    def healthy(self) -> None:
+        self.attempt = 0
+
+
 class Run:
     def __init__(self, a: argparse.Namespace):
         self.a = a
@@ -258,6 +313,7 @@ class Run:
         self.state.setdefault("stage", "init")
         self.state.setdefault("cost", {"total_usd": 0.0, "by_model": {}, "by_stage": {}, "sessions": 0, "turns": 0})
         self.deadline = time.monotonic() + a.max_hours * 3600
+        self.outage = Outage(getattr(a, "max_outage_min", 120))
         self.profile: dict | None = None  # raw profile config, the guard's config
         self.snapshot: dict[str, bytes | None] = {}  # profile files as they were when the gates were fixed
 
@@ -301,13 +357,15 @@ class Run:
         assert proc.stdin and proc.stdout
         proc.stdin.write(prompt)
         proc.stdin.close()
-        result, tail = None, []
+        result, tail, api_msg = None, [], False
         for line in proc.stdout:
             try:
                 ev = json.loads(line)
             except ValueError:
                 tail = (tail + [line.strip()])[-20:]
                 continue
+            if isinstance(ev, dict) and ev.get("type") == "assistant" and ev.get("is_api_error_message"):
+                api_msg = True
             if isinstance(ev, dict) and ev.get("type") == "result":
                 result = ev
                 continue  # not forwarded: the caller gets ONE synthetic result at the end
@@ -327,9 +385,12 @@ class Run:
         self.save()
         raw = r.get("result")
         text: str = raw if isinstance(raw, str) else ""
-        low = (text + "\n" + "\n".join(tail)).lower()
-        if (not result or r.get("is_error")) and any(p in low for p in RATE):
+        kind = failure_kind(result, text, tail, api_msg)
+        if kind == "rate":
             raise RateLimited(text + "\n" + "\n".join(tail))
+        if kind == "api":
+            raise ApiUnreachable(text + "\n" + "\n".join(tail))
+        self.outage.healthy()
         ok = bool(result) and not r.get("is_error")
         self.log(f"{stage}: session end ok={ok} cost={spent:.2f} turns={r.get('num_turns')}"
                  + ("" if ok else " error=" + " ".join(text.split())[:200] + " tail=" + " | ".join(tail[-3:])[:300]))
@@ -350,6 +411,9 @@ class Run:
                 self.log(f"{stage}: rate limited, sleeping {wait / 60:.0f} min")
                 time.sleep(wait)
                 continue  # a rate limit does not consume a try
+            except ApiUnreachable as e:
+                self.api_wait(stage, e.text)
+                continue  # an API outage does not consume a try either
             left -= 1
             if out["ok"] and done():
                 return out
@@ -358,13 +422,33 @@ class Run:
                 prompt = "Not finished: the required output files are missing or invalid. Complete the task."
         return out
 
-    def emit_result(self, text: str, is_error: bool = False) -> None:
+    def api_wait(self, stage: str, text: str) -> None:
+        """Sleeps the next backoff step of an API outage; without --no-wait budget left (or with --no-wait at once)
+        the run pauses: exit 3, state untouched, not a verdict about the code."""
+        wait = None if self.a.no_wait else self.outage.next_wait(self.deadline - time.monotonic())
+        if wait is None:
+            self.log(f"{stage}: API unreachable, pausing after {self.outage.waited / 60:.0f} min of waiting")
+            self.log(API_PAUSE)
+            (self.forge / "REPORT.md").write_text(
+                "# FORGE REPORT - PAUSED (API unreachable)\n\nThe API could not be reached; no model work was lost or judged.\n"
+                "This is NOT a verdict about the code: rerun the same command, the run continues at stage "
+                f"`{self.state['stage']}`.\n\n- last error: {' '.join(text.split())[-300:]}\n"
+                f"- waited for the API: {self.outage.waited / 60:.0f} min\n", encoding="utf-8")
+            self.emit_result(f"report: .forge/REPORT.md\n{API_PAUSE}\napi error: " + " ".join(text.split())[-300:],
+                             is_error=True, forge_outcome="paused-api")
+            if not self.a.stream:
+                print(API_PAUSE, flush=True)
+            raise SystemExit(3)
+        self.log(f"{stage}: API unreachable, retry in {wait:.0f} s (attempt {self.outage.attempt})")
+        time.sleep(wait)
+
+    def emit_result(self, text: str, is_error: bool = False, **extra: str) -> None:
         if not self.a.stream:
             return
         c = self.state["cost"]
         ev = {"type": "result", "subtype": "success", "is_error": is_error, "result": text,
               "total_cost_usd": c["total_usd"], "num_turns": c["turns"], "session_id": None,
-              "modelUsage": {m: {"costUSD": v} for m, v in c["by_model"].items()}}
+              "modelUsage": {m: {"costUSD": v} for m, v in c["by_model"].items()}, **extra}
         sys.stdout.write(json.dumps(ev) + "\n")
         sys.stdout.flush()
 
@@ -994,6 +1078,7 @@ def main() -> int:
     ap.add_argument("--preflight", action="store_true")
     ap.add_argument("--stream", action="store_true")
     ap.add_argument("--no-wait", action="store_true")
+    ap.add_argument("--max-outage-min", type=float, default=120, help="total wait for an unreachable API before pausing")
     ap.add_argument("--allow-red-base", action="store_true", help="continue when gates are red on the untouched base")
     ap.add_argument("--assume-defaults", action="store_true", help="use defaults for unanswered blocking questions")
     ap.add_argument("--final", action="store_true", help="also run the profile tier `final` once after acceptance")
