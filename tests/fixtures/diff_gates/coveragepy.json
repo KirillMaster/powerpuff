@@ -1,0 +1,1 @@
+{"meta": {"version": "7.6.0", "format": 2}, "files": {"src/calc.py": {"executed_lines": [1, 2, 4], "missing_lines": [5, 6], "excluded_lines": [9]}}, "totals": {"covered_lines": 3}}

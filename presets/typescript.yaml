@@ -1,0 +1,47 @@
+# Пресет TypeScript. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
+# {pm} / {pmx} подставляет profile_init по lock-файлу: npm | pnpm | yarn; {pmx} без сети (npx --no-install, pnpm exec, yarn).
+# Инструменты (devDependencies проекта): typescript, eslint, prettier, vitest или jest или c8, dependency-cruiser,
+# @stryker-mutator/core, jscpd; глобально - lizard (необязательно).
+stack: typescript
+detect: ["tsconfig.json", "package.json~typescript"]
+gates:
+  iteration: [typecheck, lint, lint-eslint, format, build]
+  unit: [tests, coverage-vitest, coverage-jest, coverage-c8, diff-coverage, architecture, duplication, size, complexity]
+  final: [mutation, duplication-semantic]
+commands:
+  typecheck: '{pmx} tsc --noEmit'
+  lint: '{pm} run lint'
+  lint-eslint: '{pmx} eslint .'
+  format: '{pmx} prettier --check .'
+  build: '{pm} run build'
+  tests: '{pm} run test'
+  coverage-vitest: '{pmx} vitest run --coverage --coverage.reporter=lcov'
+  coverage-jest: '{pmx} jest --coverage --coverageReporters=lcov'
+  coverage-c8: '{pmx} c8 --reporter=lcov {pm} run test'
+  diff-coverage: 'python "{plugin}/scripts/diff_gates.py" coverage --base {base} --report coverage/lcov.info --min 80'
+  architecture: '{pmx} depcruise src'
+  duplication: 'python "{plugin}/scripts/diff_gates.py" duplication --base {base} --max-new 0'
+  size: 'python "{plugin}/scripts/diff_gates.py" size --base {base} --max-lines 400 --exclude "quality-report*.json" --exclude powerpuff.yaml --exclude ".powerpuff-*" --exclude "coverage/*"'
+  complexity: 'lizard -l typescript --csv -x "*/node_modules/*" -x "*/dist/*" . > "{root}/.powerpuff-lizard.csv" && python "{plugin}/scripts/diff_gates.py" complexity --base {base} --report "{root}/.powerpuff-lizard.csv" --max 15'
+  mutation: '{pmx} stryker run'
+  duplication-semantic: '{pmx} jscpd --threshold 3 src'
+format_fix: '{pmx} prettier --write .'
+needs:
+  typecheck: "file:tsconfig.json+dep:typescript"
+  lint: "script:lint"
+  lint-eslint: "no-gate:lint+dep:eslint+file:eslint.config.*|.eslintrc*"
+  format: "dep:prettier"
+  format_fix: "dep:prettier"
+  build: "script:build"
+  tests: "script:test"
+  coverage-vitest: "script:test+dep:vitest+dep:@vitest/coverage-v8|@vitest/coverage-istanbul"
+  coverage-jest: "script:test+no-gate:coverage-vitest+dep:jest"
+  coverage-c8: "script:test+no-gate:coverage-vitest+no-gate:coverage-jest+dep:c8"
+  diff-coverage: "gate:coverage-vitest|coverage-jest|coverage-c8"
+  architecture: "dep:dependency-cruiser+file:.dependency-cruiser.*"
+  complexity: "tool:lizard"
+  mutation: "dep:@stryker-mutator/core+file:stryker.conf.*|stryker-config.json|.stryker.conf.*"
+  duplication-semantic: "dep:jscpd"
+global: [duplication, size]
+protected: ["eslint.config.*", ".eslintrc*", "tsconfig*.json", ".prettierrc*", "prettier.config.*", "vitest.config.*", "jest.config.*", "stryker.conf.*", "stryker-config.json", ".dependency-cruiser.*", ".github/workflows/**"]
+test_gates: [tests]

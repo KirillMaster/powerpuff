@@ -1,0 +1,7 @@
+{
+ "coverage": {"ok": true},
+ "frozen": {"ok": true},
+ "gates": {"ok": true, "results": {"lint": {"ok": true, "tail": ""}, "tests": {"ok": true, "tail": ""}}},
+ "guard": {"ok": true, "violations": []},
+ "done": true
+}

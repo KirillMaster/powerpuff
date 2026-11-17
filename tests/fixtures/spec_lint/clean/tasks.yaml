@@ -1,0 +1,30 @@
+feature: "Pocket ledger notes"
+tasks:
+  - id: "T001"
+    title: "Make saving idempotent"
+    description: "Modify src/store.py so that saving an identical note twice keeps a single entry."
+    story_ref: "US1"
+    requirement_refs: ["FR-001", "FR-002"]
+    depends_on: []
+    steps:
+      - order: 1
+        action: "Compare notes"
+        detail: "In src/store.py skip the write when title and body match an existing entry."
+    technical_notes:
+      - path: "src/store.py"
+        note: "Existing module holding the ledger functions."
+    acceptance_criteria:
+      - id: "AC-1"
+        description: "Two identical saves leave one entry."
+        done: false
+
+  - id: "T002"
+    title: "Add the list command"
+    description: "Create src/ledger_cli.py with a list command and update src/cli.py to register it."
+    story_ref: "US2"
+    requirement_refs: ["FR-003"]
+    depends_on: ["T001"]
+    steps:
+      - order: 1
+        action: "Write the command"
+        detail: "Print entries sorted by timestamp, newest first."

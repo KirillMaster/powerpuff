@@ -12,12 +12,16 @@ Usage: python forge_check.py [--root .] [--skip-gates] [--timeout 1800]
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-R_LINE = re.compile(r"^\s*[-*]?\s*\**(R\d+)\**\s*[:.]", re.MULTILINE)
+PLUGIN_ROOT = Path(__file__).resolve().parent.parent
+R_LINE =re.compile(r"^\s*[-*]?\s*\**(R\d+)\**\s*[:.]", re.MULTILINE)
 
 
 def frozen_files(root: Path) -> dict[str, str]:
@@ -48,18 +52,73 @@ def check_coverage(root: Path, files: dict[str, str]) -> dict:
     return {"ok": bool(ids) and not missing, "requirements": len(ids), "uncovered": missing}
 
 
-def check_gates(root: Path, timeout: int) -> dict:
+def tool_missing(code: int, out: str) -> bool:
+    low = out.lower()
+    return code in (127, 9009) or "is not recognized as an internal or external command" in low \
+        or "не является внутренней" in low
+
+
+def gate_context(root: Path, base: str | None) -> dict[str, str]:
+    """Values of the command placeholders: {base} (sha the unit started from), {root} (repo root) and {plugin}
+    (plugin root, the directory with scripts/); paths with forward slashes."""
+    return {"base": base or "", "root": str(root).replace(chr(92), "/"),
+            "plugin": str(PLUGIN_ROOT).replace(chr(92), "/")}
+
+
+def expand(cmd: str, context: dict[str, str] | None) -> str:
+    """Substitutes {base} / {root} / {plugin} in a gate command; any other {...} text is left untouched."""
+    ctx = {k: v for k, v in (context or {}).items() if v}
+    return re.sub(r"\{(base|root|plugin)\}", lambda m: ctx.get(m.group(1), m.group(0)), cmd)
+
+
+def context_env(context: dict[str, str] | None) -> dict[str, str] | None:
+    if not context:
+        return None
+    return {**os.environ, "POWERPUFF_BASE": context.get("base", ""), "POWERPUFF_ROOT": context.get("root", ""),
+            "POWERPUFF_PLUGIN": context.get("plugin", "")}
+
+
+def check_gates(root: Path, timeout: int, gates: dict | None = None, context: dict[str, str] | None = None,
+                tail_chars: int = 600) -> dict:
+    """Runs the gate commands; `gates` (id -> command) wins over .forge/state.json. A missing tool is a failure.
+    `context` (see gate_context) fills {base}/{root}/{plugin} in the commands and is exported as POWERPUFF_BASE/_ROOT/
+    _PLUGIN. Every result also has `exit_code` (null: tool missing or timeout) and `seconds` (wall time, 0.1)."""
     state = root / ".forge" / "state.json"
-    gates = (json.loads(state.read_text(encoding="utf-8")).get("gates") or {}) if state.is_file() else {}
+    if gates is None:
+        gates = (json.loads(state.read_text(encoding="utf-8")).get("gates") or {}) if state.is_file() else {}
     results = {}
+    env = context_env(context)
     for name, cmd in gates.items():
+        t0 = time.monotonic()
         try:
-            p = subprocess.run(cmd, shell=True, cwd=root, capture_output=True, text=True, timeout=timeout,
-                               encoding="utf-8", errors="replace")
-            results[name] = {"ok": p.returncode == 0, "tail": (p.stdout + p.stderr)[-600:] if p.returncode else ""}
+            p = subprocess.run(expand(cmd, context), shell=True, cwd=root, capture_output=True, text=True,
+                               timeout=timeout, encoding="utf-8", errors="replace", env=env)
+            out = p.stdout + p.stderr
+            results[name] = {"ok": p.returncode == 0, "exit_code": p.returncode,
+                             "tail": out[-tail_chars:] if p.returncode else ""}
+            if p.returncode and tool_missing(p.returncode, out):
+                results[name]["missing_tool"] = True
         except subprocess.TimeoutExpired:
-            results[name] = {"ok": False, "tail": f"timeout {timeout}s"}
+            results[name] = {"ok": False, "exit_code": None, "tail": f"timeout {timeout}s"}
+        except FileNotFoundError as e:
+            results[name] = {"ok": False, "exit_code": None, "missing_tool": True, "tail": str(e)[-tail_chars:]}
+        results[name]["seconds"] = round(time.monotonic() - t0, 1)
     return {"ok": bool(gates) and all(r["ok"] for r in results.values()), "results": results}
+
+
+def gate_row(name: str, tier: str, r: dict) -> dict:
+    """One `gates` entry of quality-report.json from a check_gates result."""
+    return {"name": name, "tier": tier, "ok": bool(r["ok"]), "exit_code": r.get("exit_code"),
+            "seconds": r.get("seconds", 0.0), "missing_tool": bool(r.get("missing_tool")),
+            "output_tail": r.get("tail", "")}
+
+
+def quality_report(tool: str, head: str | None, base: str | None, approved: bool, tier: str, rows: list[dict],
+                   **extra: object) -> dict:
+    """quality-report.json, schema 1; the one builder for quality_report.py and forge_run.py."""
+    return {"schema": 1, "tool": tool, "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "head": head or None, "base": base or None, "profile_approved": approved, "tier": tier, "gates": rows,
+            "ok": all(r["ok"] for r in rows), **extra}
 
 
 def main() -> int:
@@ -72,7 +131,10 @@ def main() -> int:
     root = Path(a.root).resolve()
     files = frozen_files(root)
     report: dict = {"coverage": check_coverage(root, files), "frozen": check_frozen(root, files)}
-    report["gates"] = {"ok": True, "skipped": True} if a.skip_gates else check_gates(root, a.timeout)
+    state = root / ".forge" / "state.json"
+    start = (json.loads(state.read_text(encoding="utf-8")).get("start_sha") if state.is_file() else None) or "HEAD"
+    report["gates"] = {"ok": True, "skipped": True} if a.skip_gates \
+        else check_gates(root, a.timeout, context=gate_context(root, start))
     report["done"] = all(report[k]["ok"] for k in ("coverage", "frozen", "gates"))
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0 if report["done"] else 1

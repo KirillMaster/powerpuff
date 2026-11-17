@@ -1,0 +1,38 @@
+# Пресет Rust. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
+# Не проверен на реальном репозитории (составлен по документации инструментов).
+# Инструменты: cargo, rustfmt, clippy (rustup); cargo-llvm-cov; cargo-deny; cargo-mutants; lizard.
+stack: rust
+detect: ["Cargo.toml"]
+gates:
+  iteration: [format, lint, build]
+  unit: [tests, coverage, diff-coverage, deny, duplication, size, complexity]
+  final: [tests-full, mutation]
+commands:
+  format: 'cargo fmt --check'
+  lint: 'cargo clippy --all-targets -- -D warnings'
+  build: 'cargo build --all-targets'
+  tests: 'cargo test'
+  coverage: 'cargo llvm-cov --lcov --output-path lcov.info'
+  diff-coverage: 'python "{plugin}/scripts/diff_gates.py" coverage --base {base} --report lcov.info --min 80'
+  deny: 'cargo deny check'
+  duplication: 'python "{plugin}/scripts/diff_gates.py" duplication --base {base} --max-new 0'
+  size: 'python "{plugin}/scripts/diff_gates.py" size --base {base} --max-lines 400 --exclude "quality-report*.json" --exclude powerpuff.yaml --exclude ".powerpuff-*" --exclude lcov.info'
+  complexity: 'lizard -l rust --csv -x "*/target/*" . > "{root}/.powerpuff-lizard.csv" && python "{plugin}/scripts/diff_gates.py" complexity --base {base} --report "{root}/.powerpuff-lizard.csv" --max 15'
+  tests-full: 'cargo test --workspace --all-features'
+  mutation: 'git diff {base} > "{root}/.powerpuff-mutants.diff" && cargo mutants --in-diff "{root}/.powerpuff-mutants.diff"'
+format_fix: 'cargo fmt'
+needs:
+  format: "tool:cargo-fmt"
+  format_fix: "tool:cargo-fmt"
+  lint: "tool:cargo-clippy"
+  build: "tool:cargo"
+  tests: "tool:cargo+has:*.rs~#[test]|file:tests/*.rs"
+  coverage: "tool:cargo-llvm-cov+has:*.rs~#[test]|file:tests/*.rs"
+  diff-coverage: "gate:coverage"
+  deny: "tool:cargo-deny+file:deny.toml"
+  complexity: "tool:lizard"
+  tests-full: "tool:cargo+has:*.rs~#[test]|file:tests/*.rs"
+  mutation: "tool:cargo-mutants"
+global: [duplication, size]
+protected: ["clippy.toml", ".clippy.toml", "rustfmt.toml", ".rustfmt.toml", "deny.toml", "rust-toolchain*", ".cargo/config.toml", ".github/workflows/**"]
+test_gates: [tests]

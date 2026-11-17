@@ -1,0 +1,3 @@
+- R1: GET /items returns a list
+- R2: pagination by `page`
+- D1: the spec was silent about the page size -> 20, because it matches the existing API

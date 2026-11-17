@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<coverage line-rate="0.5" branch-rate="1" version="1.9" timestamp="1">
+  <sources>
+    <source>C:\work\repo\src\</source>
+  </sources>
+  <packages>
+    <package name="Calc" line-rate="0.5" branch-rate="1" complexity="2">
+      <classes>
+        <class name="Calc.Adder" filename="Calc\Adder.cs" line-rate="0.5" branch-rate="1" complexity="2">
+          <methods>
+            <method name="Add" signature="(int,int)" line-rate="1" branch-rate="1">
+              <lines><line number="5" hits="3" branch="False" /></lines>
+            </method>
+          </methods>
+          <lines>
+            <line number="5" hits="3" branch="False" />
+            <line number="6" hits="0" branch="False" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

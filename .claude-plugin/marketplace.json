@@ -9,7 +9,7 @@
       "name": "powerpuff",
       "source": "./",
       "version": "0.1.0",
-      "description": "Spec in the evening, code overnight, audit cards in the morning"
+      "description": "Spec preparation with a human, autonomous implementation, human audit by decision cards"
     }
   ]
 }

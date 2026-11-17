@@ -1,0 +1,31 @@
+{
+ "run_id": "fx",
+ "status": "partial",
+ "base": "main",
+ "integration_branch": "powerpuff/run-fx",
+ "elapsed_min": 42.5,
+ "cost": {"total_usd": 12.5, "by_model": {"opus": 9.0, "sonnet": 3.5}},
+ "units": [
+  {"id": "U1", "title": "Parser", "risk": "low", "deps": [], "status": "merged", "branch": "powerpuff/fx/U1",
+   "worktree": null, "reason": "", "cost": {"total_usd": 2.0}},
+  {"id": "U2", "title": "Endpoint", "risk": "high", "deps": ["U1"], "status": "done", "branch": "powerpuff/fx/U2",
+   "worktree": null, "reason": "awaits audit", "cost": {"total_usd": 4.0}},
+  {"id": "U3", "title": "Exporter", "risk": "high", "deps": [], "status": "failed", "branch": "powerpuff/fx/U3",
+   "worktree": null, "reason": "gates red </script><img src=x onerror=alert(1)>", "cost": {"total_usd": 3.0}},
+  {"id": "U4", "title": "Report page", "risk": "low", "deps": ["U3"], "status": "blocked", "branch": "powerpuff/fx/U4",
+   "worktree": null, "reason": "dependency U3 failed"},
+  {"id": "U5", "title": "Cache", "risk": "low", "deps": [], "status": "skipped-budget", "branch": "powerpuff/fx/U5",
+   "worktree": null, "reason": "budget exhausted"},
+  {"id": "U6", "title": "Auth", "risk": "high", "deps": [], "status": "needs-answer", "branch": "powerpuff/fx/U6",
+   "worktree": null, "reason": "blocking questions: Q1"},
+  {"id": "U7", "title": "Docs", "risk": "high", "deps": [], "status": "done", "branch": "powerpuff/fx/U7",
+   "worktree": null, "reason": "awaits audit"}
+ ],
+ "awaiting_audit": ["U2", "U7"],
+ "needs_answer": [{"id": "U6", "reason": "blocking questions: Q1"}],
+ "blocked": [{"id": "U4", "reason": "dependency U3 failed"}],
+ "final": {
+  "lint": {"ok": false, "code": 1, "tail": "src/a.py:1: E501 line too long\n1 error"},
+  "unit_all": {"ok": true, "code": 0, "tail": ""}
+ }
+}

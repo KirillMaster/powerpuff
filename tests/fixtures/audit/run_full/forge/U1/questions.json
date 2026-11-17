@@ -1,0 +1,8 @@
+[
+ {"id": "Q1", "class": "non-blocking", "question": "Q1 Which header format </script><img src=x onerror=alert(1)>?",
+  "default": "RFC 7231", "wrong_guess_cost": "one unit of rework", "answer": null},
+ {"id": "Q2", "class": "info", "question": "Q2 Python 3.11 assumed", "default": "yes", "wrong_guess_cost": "none",
+  "answer": null},
+ {"id": "Q3", "class": "blocking", "question": "Q3 Already decided", "default": "a", "wrong_guess_cost": "x",
+  "answer": "b"}
+]

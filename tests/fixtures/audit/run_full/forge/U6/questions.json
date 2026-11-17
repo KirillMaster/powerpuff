@@ -1,0 +1,4 @@
+[
+ {"id": "Q1", "class": "blocking", "question": "Q1 Which auth scheme?", "default": "bearer token",
+  "wrong_guess_cost": "rewrite of the middleware", "answer": null}
+]

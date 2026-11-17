@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<cppncss>
+  <measure type="Function">
+    <labels><label>Nr.</label><label>NLOC</label><label>CCN</label><label>token</label><label>param</label><label>length</label></labels>
+    <item name="add(a) at ./src/calc.py:1"><value>1</value><value>5</value><value>2</value><value>30</value><value>1</value><value>5</value></item>
+    <item name="route(a,b) at ./src/calc.py:10"><value>2</value><value>20</value><value>18</value><value>120</value><value>2</value><value>22</value></item>
+    <average label="NLOC" lcount="25"/>
+  </measure>
+  <measure type="File"><labels><label>Nr.</label><label>NLOC</label></labels></measure>
+</cppncss>

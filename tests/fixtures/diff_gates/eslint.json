@@ -1,0 +1,1 @@
+[{"filePath": "C:\\work\\repo\\src\\calc.ts", "messages": [{"ruleId": "complexity", "severity": 1, "message": "Function 'route' has a complexity of 18. Maximum allowed is 15.", "line": 10, "endLine": 31}, {"ruleId": "semi", "message": "Missing semicolon.", "line": 2}]}, {"filePath": "C:\\work\\repo\\src\\ok.ts", "messages": []}]

@@ -1,0 +1,41 @@
+# Пресет Python. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
+# Инструменты: python, pytest; ruff; pyright или mypy; coverage; import-linter; lizard; mutmut.
+stack: python
+detect: ["pyproject.toml", "setup.py", "setup.cfg", "requirements*.txt", "Pipfile"]
+gates:
+  iteration: [syntax, lint, format, typecheck, typecheck-mypy]
+  unit: [tests, coverage, diff-coverage, architecture, duplication, size, complexity]
+  final: [tests-full, mutation]
+commands:
+  syntax: 'python -m compileall -q -x "venv|node_modules|site-packages" .'
+  lint: 'ruff check .'
+  format: 'ruff format --check .'
+  typecheck: 'pyright'
+  typecheck-mypy: 'mypy .'
+  tests: 'python -m pytest -q'
+  coverage: 'python -m coverage run -m pytest -q && python -m coverage json -o coverage.json'
+  diff-coverage: 'python "{plugin}/scripts/diff_gates.py" coverage --base {base} --report coverage.json --min 80'
+  architecture: 'lint-imports'
+  duplication: 'python "{plugin}/scripts/diff_gates.py" duplication --base {base} --max-new 0'
+  size: 'python "{plugin}/scripts/diff_gates.py" size --base {base} --max-lines 400 --exclude "quality-report*.json" --exclude powerpuff.yaml --exclude ".powerpuff-*" --exclude coverage.json'
+  complexity: 'lizard -l python --csv -x "*/.venv/*" -x "*/venv/*" . > "{root}/.powerpuff-lizard.csv" && python "{plugin}/scripts/diff_gates.py" complexity --base {base} --report "{root}/.powerpuff-lizard.csv" --max 15'
+  tests-full: 'python -m pytest -q -p no:cacheprovider'
+  mutation: 'mutmut run'
+format_fix: 'ruff format .'
+needs:
+  syntax: "tool:python"
+  lint: "file:ruff.toml|.ruff.toml|has:pyproject.toml~tool.ruff|has:requirements*.txt~ruff"
+  format: "file:ruff.toml|.ruff.toml|has:pyproject.toml~tool.ruff|has:requirements*.txt~ruff"
+  format_fix: "file:ruff.toml|.ruff.toml|has:pyproject.toml~tool.ruff|has:requirements*.txt~ruff"
+  typecheck: "file:pyrightconfig.json|has:pyproject.toml~tool.pyright"
+  typecheck-mypy: "no-gate:typecheck+file:mypy.ini|.mypy.ini|has:pyproject.toml~tool.mypy|has:setup.cfg~mypy"
+  tests: "tests:test_*.py|*_test.py+tool:pytest|file:pytest.ini|has:pyproject.toml~pytest|has:requirements*.txt~pytest"
+  coverage: "tests:test_*.py|*_test.py+tool:coverage|has:pyproject.toml~coverage|has:requirements*.txt~coverage"
+  diff-coverage: "gate:coverage"
+  architecture: "tool:lint-imports+file:.importlinter|has:pyproject.toml~importlinter|has:setup.cfg~importlinter"
+  complexity: "tool:lizard"
+  tests-full: "tests:test_*.py|*_test.py+tool:pytest|file:pytest.ini|has:pyproject.toml~pytest|has:requirements*.txt~pytest"
+  mutation: "tool:mutmut+tests:test_*.py|*_test.py"
+global: [duplication, size]
+protected: ["ruff.toml", ".ruff.toml", "pyproject.toml", "setup.cfg", "mypy.ini", "pyrightconfig.json", "pytest.ini", "tox.ini", ".importlinter", ".coveragerc", ".pre-commit-config.yaml", ".github/workflows/**"]
+test_gates: [tests]

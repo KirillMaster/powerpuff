@@ -4,3 +4,5 @@ __pycache__/
 .venv/
 .forge/
 .forge-run.log
+.powerpuff/
+quality-report.json

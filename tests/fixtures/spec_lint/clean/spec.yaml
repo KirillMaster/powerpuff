@@ -1,0 +1,85 @@
+feature: "Pocket ledger notes"
+status: "Approved"
+input: "A command line tool that keeps short notes in a local ledger."
+
+user_stories:
+  - id: "US1"
+    title: "Save a note"
+    description: "The user saves a note from the command line and finds it again after restarting the tool."
+    acceptance_scenarios:
+      - id: "AS-1"
+        given: "an empty ledger"
+        when: "the user saves a note"
+        then: "the ledger holds one note"
+      - id: "AS-2"
+        given: "a ledger holding a note"
+        when: "the user saves the same note again"
+        then: "the ledger still holds one note"
+    acceptance_criteria:
+      - id: "AC-1"
+        description: "Saving the same note twice is idempotent and never duplicates data."
+        done: false
+    test_scenarios:
+      - id: "TS-1"
+        covers: ["AS-1"]
+        given:
+          - "an empty ledger"
+        when: "a note is saved"
+        then:
+          - "the ledger file holds one note"
+        verification:
+          - "automated"
+        level: "unit"
+      - id: "TS-2"
+        covers: ["AS-2"]
+        given:
+          - "a ledger holding a note"
+        when: "the same note is saved twice"
+        then:
+          - "the ledger file still holds one note"
+        verification:
+          - "automated"
+        level: "unit"
+
+  - id: "US2"
+    title: "Browse notes"
+    description: "The user lists stored notes with the newest first."
+    acceptance_scenarios:
+      - id: "AS-3"
+        given: "a ledger holding three notes"
+        when: "the user lists notes"
+        then: "the notes are printed newest first"
+    test_scenarios:
+      - id: "TS-3"
+        given:
+          - "a ledger holding three notes"
+        when: "the list command runs"
+        then:
+          - "the output is ordered newest first"
+        verification:
+          - "automated"
+        level: "unit"
+
+functional_requirements:
+  - id: "FR-001"
+    text: "The tool MUST store each note with a title and a timestamp."
+    story_refs: ["US1"]
+  - id: "FR-002"
+    text: "The tool MUST ignore a note identical to an existing one."
+    story_refs: ["US1"]
+  - id: "FR-003"
+    text: "The tool MUST print notes newest first."
+    story_refs: ["US2"]
+
+success_criteria:
+  - id: "SC-001"
+    description: "A ledger with 1000 notes lists in under 200 ms."
+    story_refs: ["US2"]
+
+out_of_scope:
+  - item: "Export to CSV"
+    story: "US2"
+
+follow_ups:
+  - item: "Note tagging"
+    owner: "alice"

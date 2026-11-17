@@ -1,0 +1,36 @@
+# Пресет .NET. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
+# Инструменты: dotnet SDK (обязателен); coverlet.collector в тестовом проекте (покрытие); lizard (сложность);
+# KirillMaster.QualityGates.Cli (`dotnet tool install -g KirillMaster.QualityGates.Cli`, команда `qg`) - необязательный финальный гейт.
+stack: dotnet
+detect: ["*.sln", "*.slnx", "*.csproj"]
+gates:
+  iteration: [build, format]
+  unit: [tests, coverage, diff-coverage, duplication, size, complexity]
+  final: [tests-full, qg-pr, qg-mutation]
+commands:
+  build: 'dotnet build -warnaserror'
+  format: 'dotnet format --verify-no-changes'
+  tests: 'dotnet test'
+  coverage: 'dotnet test --collect:"XPlat Code Coverage"'
+  diff-coverage: 'python "{plugin}/scripts/diff_gates.py" coverage --base {base} --report "**/coverage.cobertura.xml" --min 80'
+  duplication: 'python "{plugin}/scripts/diff_gates.py" duplication --base {base} --max-new 0'
+  size: 'python "{plugin}/scripts/diff_gates.py" size --base {base} --max-lines 400 --exclude "quality-report*.json" --exclude powerpuff.yaml --exclude ".powerpuff-*" --exclude "*/TestResults/*"'
+  complexity: 'lizard -l csharp --csv -x "*/obj/*" -x "*/bin/*" . > "{root}/.powerpuff-lizard.csv" && python "{plugin}/scripts/diff_gates.py" complexity --base {base} --report "{root}/.powerpuff-lizard.csv" --max 15'
+  tests-full: 'dotnet test --configuration Release'
+  qg-pr: 'qg pr'
+  qg-mutation: 'qg mutation-diff'
+format_fix: 'dotnet format'
+needs:
+  build: "tool:dotnet"
+  format: "tool:dotnet"
+  format_fix: "tool:dotnet"
+  tests: "tool:dotnet+tests:*Test*.csproj|*Tests.cs|*Test.cs"
+  coverage: "tool:dotnet+has:*.csproj~coverlet"
+  diff-coverage: "gate:coverage"
+  complexity: "tool:lizard"
+  tests-full: "tool:dotnet+tests:*Test*.csproj|*Tests.cs|*Test.cs"
+  qg-pr: "tool:qg"
+  qg-mutation: "tool:qg"
+global: [duplication, size]
+protected: [".editorconfig", "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props", ".globalconfig", "*.ruleset", "global.json", "nuget.config", "*.runsettings", "stryker-config.json", "quality/**", ".github/workflows/**"]
+test_gates: [tests]
