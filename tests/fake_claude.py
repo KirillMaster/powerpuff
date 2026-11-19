@@ -25,7 +25,8 @@ FIRST_LINES = [("You are the spec auditor", "audit"), ("You write the acceptance
                ("The acceptance tests pass without any implementation", "vacuous"),
                ("The deterministic check failed", "fix"), ("You are the independent acceptance reviewer", "accept"),
                ("The independent acceptance review found gaps", "gapfix"), ("Not finished", "retry"),
-               ("Turn 1 of 2", "ptests"), ("Turn 2 of 2", "pbuild"), ("Human decisions arrived", "panswers")]
+               ("Turn 1 of 2", "ptests"), ("Turn 2 of 2", "pbuild"), ("Human decisions arrived", "panswers"),
+               ("These requirement ids", "pcover")]
 
 REQS = "R1: foo returns 42\nR2: bar returns 7\nD1: rounding -> floor - existing code\nQ1: anything else?\n"
 GATE = 'python -c "import app; assert app.foo() == 42 and app.bar() == 7"'

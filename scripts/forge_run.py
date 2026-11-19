@@ -164,6 +164,10 @@ SPEC:
 PLAIN_ANSWERS = """Human decisions arrived for your questions (binding). Update your acceptance tests accordingly: you may
 edit the test files you created in turn 1, nothing else, and write no production code. Finish with one line: TESTS: done"""
 
+PLAIN_COVER = """These requirement ids of the spec are not named in any acceptance test yet: IDS. Add acceptance tests for
+them (new files, or the test files you created in this run), naming the id in the test name or a comment. No
+production code. Finish with one line: TESTS: done"""
+
 PLAIN_BUILD = """Turn 2 of 2. Implement the spec. The acceptance tests of turn 1 are frozen (do not edit, delete or skip):
 FROZEN
 Rules:
@@ -935,8 +939,8 @@ class Run:
         self.note_gates(chk["results"])
         rep: dict = {"coverage": forge_check.check_coverage(self.root, files),
                      "frozen": forge_check.check_frozen(self.root, files), "gates": chk, "guard": self.guard()}
-        if self.engine == "plain":  # no R lines: the tests are the requirements
-            rep["coverage"] = {"ok": True, "requirements": 0, "uncovered": []}
+        if self.engine == "plain":  # spec R ids named in the frozen tests; a gap is reported, not fixable after the freeze
+            rep["coverage"] = {**self.spec_coverage(files), "ok": True}
         if tampered:
             rep["frozen"] = {"ok": False, "files": len(files), "changed_or_missing": tampered,
                              "note": "restored from git; frozen acceptance tests must not be edited"}
@@ -1058,6 +1062,15 @@ class Run:
         return {"tracked": {f: None if b is None else bytes.fromhex(b) for f, b in raw["tracked"].items()},
                 "untracked": raw["untracked"]}
 
+    def spec_coverage(self, files) -> dict:
+        """`R<n>` ids of the spec (lines `R1: ...` / `- R1: ...`) that no acceptance test names."""
+        spec = self.forge / "spec.md"
+        raw = spec.read_text(encoding="utf-8") if spec.is_file() else ""
+        ids = sorted(set(forge_check.R_LINE.findall(raw)), key=lambda x: int(x[1:]))
+        text = "\n".join((self.root / f).read_text(encoding="utf-8", errors="replace")
+                         for f in files if (self.root / f).is_file())
+        return {"requirements": len(ids), "uncovered": [r for r in ids if not re.search(rf"\b{r}\b", text)]}
+
     def write_frozen_json(self) -> None:
         """Run-scoped protected list for hook_protect: sessions of this run cannot edit the frozen tests."""
         files = forge_check.frozen_files(self.root)
@@ -1087,6 +1100,13 @@ class Run:
         tests = self.plain_new_tests(before)
         if not tests:
             raise SystemExit(self.finish("failed", "no acceptance tests written"))
+        missing = self.spec_coverage(tests)["uncovered"]
+        if missing and not self.state.get("plain_cover_sent"):
+            self.state["plain_cover_sent"] = True
+            self.save()
+            self.plain_turn("plain-tests-cover", PLAIN_COVER.replace("IDS", ", ".join(missing)))
+            self.keep_additive("plain-tests-cover", before)
+            tests = self.plain_new_tests(before)
         (self.forge / "acceptance-files.txt").write_text("\n".join(tests) + "\n", encoding="utf-8")
         self.freeze(tests)
         self.commit_frozen("forge: acceptance tests")
@@ -1228,7 +1248,7 @@ class Run:
                  *([f"- frozen test violations (restored from git): {self.state['frozen_violations']}"]
                    if self.state.get("frozen_violations") else []),
                  *([f"- base was red (allowed by --allow-red-base): {', '.join(base_red)}"] if base_red else []),
-                 f"- requirements: {len(pick('R'))}, uncovered: {rep.get('coverage', {}).get('uncovered', 'n/a')}",
+                 f"- requirements: {rep.get('coverage', {}).get('requirements') or len(pick('R'))}, uncovered: {rep.get('coverage', {}).get('uncovered', 'n/a')}",
                  f"- frozen tests intact: {rep.get('frozen', {}).get('ok', 'n/a')}",
                  f"- acceptance tests fail before implementation: {red_line}",
                  *(["- acceptance tests: PASS WITHOUT IMPLEMENTATION (vacuous) - review"]

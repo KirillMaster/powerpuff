@@ -13,7 +13,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(ROOT / "scripts"))
 import queue_run  # noqa: E402
-from fake_claude import GATE, TEST_FILE  # noqa: E402
+from fake_claude import EXTRA_TEST, GATE, TEST_FILE  # noqa: E402
 from test_forge_profile import profile  # noqa: E402
 from test_forge_run import BAD, FINAL, Harness  # noqa: E402
 from test_queue_run import QH, unit  # noqa: E402
@@ -202,6 +202,21 @@ def test_resumed_session_cost_counts_only_the_increment(h: PH) -> None:
     h.run()
     assert h.stages() == ["ptests", "pbuild", "fix", "fix"]
     assert h.state()["cost"]["total_usd"] == 1.0
+
+
+def test_uncovered_spec_ids_get_one_cover_turn(h: PH) -> None:
+    h.scenario({"pcover": [{"write": {"tests/test_r3.py": EXTRA_TEST}}]})
+    r = h.run("R1: foo returns 42\nR2: bar returns 7\nR3: baz exists")
+    assert r.rc == 0, r.err
+    assert h.stages() == ["ptests", "pcover", "pbuild"]
+    assert "R3" in h.of("pcover")[0]["prompt"] and "requirements: 3, uncovered: []" in h.report()
+
+
+def test_uncovered_spec_id_left_is_reported_not_fatal(h: PH) -> None:
+    r = h.run("R1: foo returns 42\nR3: baz exists")
+    assert r.rc == 0, r.err
+    assert h.stages() == ["ptests", "pcover", "pbuild"]
+    assert "requirements: 2, uncovered: ['R3']" in h.report()
 
 
 def test_default_fix_rounds_is_four(h: PH) -> None:
