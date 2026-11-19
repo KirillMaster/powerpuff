@@ -675,15 +675,15 @@ class Run:
         gates: dict = self.state.get("gates") or {}
         res = self.note_gates(forge_check.check_gates(self.root, self.a.gate_timeout, gates,
                                                       self.gate_ctx(head=True))["results"]) if gates else {}
+        draft = self.state.get("gates_source") == "profile" and not self.state.get("profile_approved")
         for name, r in res.items():
-            if r.get("missing_tool"):
+            if r.get("missing_tool") and not draft:  # a draft guessed the tool: handled as red on base below
                 words = gates[name].split()
                 self.state["base_red_tails"] = {name: r.get("tail", "")}
                 raise SystemExit(self.fail_resumable(
                     f"base check: missing tool '{words[0] if words else gates[name]}' (gate '{name}')", stage))
         red = {n: r.get("tail", "") for n, r in res.items() if not r["ok"]}
-        if red and self.state.get("gates_source") == "profile" and not self.state.get("profile_approved") \
-                and len(red) < len(gates):
+        if red and draft and len(red) < len(gates):
             # an unapproved preset draft guessed commands that do not work on this repo: drop them, say so loudly
             self.state["base_red_tails"] = red
             self.state["gates_excluded_red_on_base"] = sorted(red)

@@ -98,6 +98,23 @@ def test_approved_profile_keeps_red_base_fatal(tmp_path: Path) -> None:
     assert FINAL(r.out) == "FORGE: failed" and "base is red: bad" in h.report()
 
 
+def test_draft_profile_gate_with_missing_tool_is_excluded(tmp_path: Path) -> None:
+    h = PH(tmp_path, "approved: false\ngates:\n  iteration: [ok, gone]\ncommands:\n  ok: 'python -c \"pass\"'\n"
+                     "  gone: 'no-such-tool-pp --check'\n")
+    h.base_check = True
+    r = h.run()
+    assert r.rc == 0, r.err
+    assert "excluded: gone" in h.report()
+
+
+def test_approved_profile_missing_tool_stays_fatal(tmp_path: Path) -> None:
+    h = PH(tmp_path, "approved: true\ngates:\n  iteration: [ok, gone]\ncommands:\n  ok: 'python -c \"pass\"'\n"
+                     "  gone: 'no-such-tool-pp --check'\n")
+    h.base_check = True
+    r = h.run()
+    assert FINAL(r.out) == "FORGE: failed" and "missing tool 'no-such-tool-pp'" in h.report()
+
+
 def test_blocking_question_pauses_then_answers_resume_the_session(h: PH) -> None:
     h.scenario({"ptests": [{"base": True, "append": {".forge/requirements.md": BLOCKING.replace("Q1", "Q2")}}]})
     r = h.run()
