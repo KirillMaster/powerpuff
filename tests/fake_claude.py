@@ -8,7 +8,9 @@ or entry "default" = the stage's happy-path behaviour. Entry keys:
   write {path: text}, append {path: text}, delete [path]
   result       ok (default) | rate_limit | is_error | no_result | api_error      epoch (rate_limit), text, cost, exit_code
   kill_driver  terminate the driver process, then exit without a result event
-Stages are recognised by the first line of the prompt: audit tests topup vacuous implement fix accept gapfix retry.
+Stages are recognised by the first line of the prompt: audit tests topup vacuous implement fix accept gapfix retry
+and, for the plain engine, ptests (turn 1) pbuild (turn 2) panswers. Every session reports session_id `sess-<n>`; the
+call log keeps `resume` (the id given to --resume).
 """
 
 import json
@@ -22,7 +24,8 @@ FIRST_LINES = [("You are the spec auditor", "audit"), ("You write the acceptance
                ("You complete the acceptance tests", "topup"), ("You implement a spec", "implement"),
                ("The acceptance tests pass without any implementation", "vacuous"),
                ("The deterministic check failed", "fix"), ("You are the independent acceptance reviewer", "accept"),
-               ("The independent acceptance review found gaps", "gapfix"), ("Not finished", "retry")]
+               ("The independent acceptance review found gaps", "gapfix"), ("Not finished", "retry"),
+               ("Turn 1 of 2", "ptests"), ("Turn 2 of 2", "pbuild"), ("Human decisions arrived", "panswers")]
 
 REQS = "R1: foo returns 42\nR2: bar returns 7\nD1: rounding -> floor - existing code\nQ1: anything else?\n"
 GATE = 'python -c "import app; assert app.foo() == 42 and app.bar() == 7"'
@@ -31,6 +34,7 @@ TEST_FILE = ("from app import foo, bar\n\n\ndef test_r1():\n    # R1\n    assert
              "def test_r2():\n    # R2\n    assert bar() == 7\n")
 EXTRA_TEST = "def test_r3():\n    # R3\n    pass\n"
 VACUOUS_TEST = "def test_r1_new():\n    # R1\n    assert False\n"
+PLAIN_Q = "Q1 [non-blocking]: anything else? | default: no | cost of a wrong guess: low\n"
 NO_GAPS = json.dumps({"gaps": [], "questions": []})
 
 DEFAULT_WRITE = {
@@ -41,6 +45,9 @@ DEFAULT_WRITE = {
     "vacuous": {"tests/test_acceptance_vacuous.py": VACUOUS_TEST},
     "implement": {"app.py": GOOD_APP}, "fix": {"app.py": GOOD_APP}, "gapfix": {"app.py": GOOD_APP},
     "accept": {".forge/gaps.json": NO_GAPS},
+    "ptests": {"tests/test_acceptance.py": TEST_FILE, ".forge/acceptance-files.txt": "tests/test_acceptance.py\n",
+               ".forge/requirements.md": PLAIN_Q},
+    "pbuild": {"app.py": GOOD_APP},
 }
 DEFAULT_APPEND = {"topup": {".forge/acceptance-files.txt": "tests/test_acceptance_extra.py\n"},
                   "vacuous": {".forge/acceptance-files.txt": "tests/test_acceptance_vacuous.py\n"}}

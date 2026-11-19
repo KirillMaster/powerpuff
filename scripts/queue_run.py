@@ -3,7 +3,8 @@
 Every unit runs through forge_run.py in its own git worktree and branch (cut from the current tip of the integration
 branch); a failed or blocked unit never stops the run. State: <repo>/.powerpuff/runs/<run_id>/state.json (resumable).
 
-Usage: python queue_run.py <queue.yaml> [--repo .] [--no-wait] [--only U1,U2] [--dry-run] [--attended]
+Usage: python queue_run.py <queue.yaml> [--repo .] [--engine plain|forge] [--no-wait] [--only U1,U2] [--dry-run] [--attended]
+  --engine    forge_run engine of every unit; overrides queue.yaml `engine` (default plain)
   --no-wait   on a rate limit stop the run with exit 3 (state saved) instead of sleeping
   --max-outage-min  forge paused on an unreachable API (exit 3): wait 30 s, 60 s, ... <=15 min and rerun the unit;
               after N minutes in total (or with --no-wait at once) stop with exit 3, the unit stays `running`
@@ -33,6 +34,7 @@ import forge_run  # noqa: E402
 FORGE = Path(__file__).resolve().parent / "forge_run.py"
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 RISKS = ("low", "high")
+ENGINES = ("plain", "forge")
 GOOD = ("merged", "done")
 EXCLUDES = (".powerpuff/", ".forge/", ".forge-unit-spec.md")
 IDENT = ["-c", "user.name=powerpuff", "-c", "user.email=powerpuff@local"]
@@ -112,6 +114,10 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
     if auto is None or any(a not in RISKS for a in auto):
         errs.append(f"auto_merge must be a list of {RISKS}")
         auto = []
+    engine = q.get("engine") or "plain"
+    if engine not in ENGINES:
+        errs.append(f"engine must be one of {ENGINES}")
+        engine = "plain"
     assume = q.get("assume_defaults", False)
     if not isinstance(assume, bool):
         errs.append("assume_defaults must be true or false")
@@ -186,7 +192,7 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
                                 f"the other")
     cfg = {"run_id": run_id, "base": str(q.get("base") or "HEAD"), "integration_branch": ib,
            "model": str(q.get("model") or "opus"), "writer": str(q.get("writer") or "sonnet"),
-           "auto_merge": auto, "assume_defaults": assume, "units": units, "final": final, "shared": shared_path, **nums}
+           "auto_merge": auto, "assume_defaults": assume, "engine": engine, "units": units, "final": final, "shared": shared_path, **nums}
     return cfg, errs
 
 
@@ -418,7 +424,7 @@ class Queue:
     def forge_cmd(self, spec: Path, wt: Path, cap: float) -> list[str]:
         hours = max(self.remaining_s(), 60) / 3600
         return [sys.executable, str(FORGE), str(spec), "--repo", str(wt), "--model", self.cfg["model"],
-                "--writer", self.cfg["writer"], "--max-usd", f"{cap:.4f}", "--max-hours", f"{hours:.4f}",
+                "--writer", self.cfg["writer"], "--engine", self.cfg["engine"], "--max-usd", f"{cap:.4f}", "--max-hours", f"{hours:.4f}",
                 "--no-wait", "--stream", *(["--assume-defaults"] if self.cfg.get("assume_defaults") else [])]
 
     def run_forge(self, uid: str, wt: Path, spec: Path) -> tuple[int, str]:
@@ -730,6 +736,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo", default=".")
     ap.add_argument("--no-wait", action="store_true")
     ap.add_argument("--max-outage-min", type=float, default=120, help="total wait for an unreachable API before stopping")
+    ap.add_argument("--engine", choices=("plain", "forge"), help="overrides `engine` of the queue file (default plain)")
     ap.add_argument("--only", default="")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--attended", action="store_true")
@@ -752,6 +759,8 @@ def main(argv: list[str] | None = None) -> int:
         cfg, errs = normalize(load_queue(qfile), qfile, repo)
     except (OSError, ValueError) as e:
         return config_error([f"cannot read {qfile}: {e}"])
+    if a.engine:
+        cfg["engine"] = a.engine
     if a.only:
         errs += [f"--only: unknown unit {x}" for x in a.only.split(",") if x not in {u["id"] for u in cfg["units"]}]
     run_dir = repo / ".powerpuff" / "runs" / cfg["run_id"]

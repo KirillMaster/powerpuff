@@ -32,8 +32,8 @@ def forge_inproc(h: FH, mp: pytest.MonkeyPatch, *args: str) -> tuple[int, list[f
     mp.chdir(h.tmp)
     slept: list[float] = []
     mp.setattr(forge_run.time, "sleep", slept.append)
-    mp.setattr(sys, "argv", ["forge_run.py", "Build foo", "--repo", str(h.repo), "--model", "strong", "--writer", "writer",
-                             "--max-hours", "0.5", "--skip-base-check", *args])
+    mp.setattr(sys, "argv", ["forge_run.py", "Build foo", "--repo", str(h.repo), "--engine", "forge", "--model", "strong",
+                             "--writer", "writer", "--max-hours", "0.5", "--skip-base-check", *args])
     try:
         rc = forge_run.main()
     except SystemExit as e:

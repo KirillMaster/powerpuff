@@ -145,7 +145,7 @@ class QH:
         return p.stdout.strip()
 
     def queue(self, units: list[dict], **top: object) -> Path:
-        q = {"run_id": "r1", "base": "main", "auto_merge": ["low"], "model": "strong", "writer": "writer",
+        q = {"run_id": "r1", "engine": "forge", "base": "main", "auto_merge": ["low"], "model": "strong", "writer": "writer",
              "budget": {"max_usd": 60, "max_hours": 0.5}, "units": units, **top}
         p = self.tmp / "queue.yaml"
         p.write_text(json.dumps(q, indent=1), encoding="utf-8")

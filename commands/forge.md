@@ -1,6 +1,6 @@
 ---
-description: forge — turnkey spec→program run. A script orchestrates; Opus audits the spec and does one fresh acceptance; Sonnet writes frozen acceptance tests and the code in one context. Resumable; no questions during the run, a blocking question stops it
-argument-hint: "<spec-dir | spec file | ticket text> [--preflight] [--assume-defaults] [--allow-red-base] [--final] [--writer sonnet|opus] [--max-usd N] [--max-hours N]"
+description: forge — turnkey spec→program run (default engine `plain`: one model context + script-enforced checks; `--engine forge`: the multi-session pipeline below). A script orchestrates; Opus audits the spec and does one fresh acceptance; Sonnet writes frozen acceptance tests and the code in one context. Resumable; no questions during the run, a blocking question stops it
+argument-hint: "<spec-dir | spec file | ticket text> [--engine plain|forge] [--accept] [--max-fix-rounds N] [--preflight] [--assume-defaults] [--allow-red-base] [--final] [--writer sonnet|opus] [--max-usd N] [--max-hours N]"
 ---
 
 # /forge — spec → turnkey program
@@ -13,12 +13,13 @@ The orchestrator is the script `${CLAUDE_PLUGIN_ROOT}/scripts/forge_run.py`, not
    - Windows: `powershell.exe -NoProfile -Command "Start-Process cmd -WindowStyle Hidden -ArgumentList '/c set PYTHONUNBUFFERED=1&& python ${CLAUDE_PLUGIN_ROOT}/scripts/forge_run.py $ARGUMENTS > .forge-run.log 2>&1'"`
    A ticket text with spaces: write it to `<root>/.forge-ticket.md` first and pass that path.
 3. Tell the user in three lines: the run is detached; progress is in `<root>/.forge/progress.md`; the result is `<root>/.forge/REPORT.md` with the last log line `FORGE: done|failed`. Re-running the same command resumes from `.forge/state.json`.
-4. `--preflight`: wait for the driver to print `FORGE: preflight`, then show the questions of `.forge/questions.json` (the driver prints the count per class) to the user; write each answer into its `"answer"` field and rerun without `--preflight`. Without `--assume-defaults` a run with an unanswered `blocking` question fails (`blocking questions: Q1,Q4`, exit 1) and continues from the same state once answered; answered questions reach the test-writer and builder as `Human decisions:`.
-5. `--allow-red-base`: continue although gates are red on the untouched base tree (default: `FORGE: failed`, `base is red: <gates>`, nothing spent); a missing tool always fails.
-6. `--final`: after green acceptance run the profile tier `final` once (red → `FORGE: failed`, `final gates red: <names>`, rerun repeats only this step). Without it tier `final` belongs to the end of a queue run (`queue_run.py`).
-7. Gate commands may use `{base}` (the commit the run started from) `{root}` and `{plugin}` (plugin root); also exported as `POWERPUFF_BASE` / `POWERPUFF_ROOT` / `POWERPUFF_PLUGIN`. The run also writes `.forge/quality-report.json`.
+4. `--engine plain|forge` (default `plain`, see `docs/engine-plain.md`): `plain` = ONE model context continued with `--resume` (turn 1: questions + acceptance tests as new files, the script freezes them; turn 2: implementation; red gates → the same session is resumed with the failing gates, `--max-fix-rounds N` (4); `--accept` adds one independent acceptance pass at the end); needs `powerpuff.yaml`. `forge` = the pipeline described below, unchanged. The engine is stored in `.forge/state.json`: a resumed run keeps it.
+5. `--preflight`: wait for the driver to print `FORGE: preflight`, then show the questions of `.forge/questions.json` (the driver prints the count per class) to the user; write each answer into its `"answer"` field and rerun without `--preflight`. Without `--assume-defaults` a run with an unanswered `blocking` question fails (`blocking questions: Q1,Q4`, exit 1) and continues from the same state once answered; answered questions reach the test-writer and builder as `Human decisions:`.
+6. `--allow-red-base`: continue although gates are red on the untouched base tree (default: `FORGE: failed`, `base is red: <gates>`, nothing spent); a missing tool always fails.
+7. `--final`: after green acceptance run the profile tier `final` once (red → `FORGE: failed`, `final gates red: <names>`, rerun repeats only this step). Without it tier `final` belongs to the end of a queue run (`queue_run.py`).
+8. Gate commands may use `{base}` (the commit the run started from) `{root}` and `{plugin}` (plugin root); also exported as `POWERPUFF_BASE` / `POWERPUFF_ROOT` / `POWERPUFF_PLUGIN`. The run also writes `.forge/quality-report.json`.
 
-What the driver does (every stage is one `claude -p` session, the script checks the output files):
+What the driver does with `--engine forge` (every stage is one `claude -p` session, the script checks the output files):
 | Stage | Model | Output |
 |---|---|---|
 | base check | script | all gates once on the untouched base (before the audit with a profile, after it otherwise); red → failed unless `--allow-red-base` |

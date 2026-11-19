@@ -3,7 +3,7 @@
 `queue_run.py` — внешний скрипт-оркестратор автономного прогона: сам моделей не вызывает, каждую единицу отдаёт `forge_run.py`. Провал или блокировка одной единицы прогон не останавливают.
 
 ```
-python scripts/queue_run.py queue.yaml [--repo .] [--no-wait] [--only U1,U2] [--dry-run] [--attended]
+python scripts/queue_run.py queue.yaml [--repo .] [--engine plain|forge] [--no-wait] [--only U1,U2] [--dry-run] [--attended]
 ```
 
 ## Пример
@@ -15,6 +15,7 @@ spec: specs/001-feature
 budget: {max_usd: 60, max_hours: 8, fix_reserve: 0.33}
 model: opus
 writer: sonnet
+engine: plain          # plain (по умолчанию) | forge; CLI --engine перекрывает
 auto_merge: [low]
 final:
   timeout: 1800

@@ -1,6 +1,13 @@
 """forge v2 - script-orchestrated spec -> program run. The orchestrator is this script, not a model.
 
-Stages (state in .forge/state.json, resumable; every stage is one `claude -p` session):
+Engines (`--engine`, state key `engine`): `plain` (default) = ONE model context continued with `--resume`:
+  plain-tests  turn 1: questions + acceptance tests as NEW files only; script guard, freeze (.forge/frozen.sha256,
+               .forge/frozen.json for hook_protect), red check on the base
+  plain-build  turn 2: implement; script gates (profile required), red -> resume the SAME session with the failing
+               gates, <= --max-fix-rounds; `--accept` adds the acceptance pass below at the end
+`forge` = the multi-session pipeline below, unchanged.
+
+Stages of the forge engine (state in .forge/state.json, resumable; every stage is one `claude -p` session):
   audit   (strong model)  spec -> .forge/requirements.md (R/D lines), digest.md, gates.json
   tests   (writer model)  acceptance tests from R/D, context never sees an implementation; frozen by sha256;
                           then the test gates must be red on the tree without implementation (else one `vacuous` session)
@@ -9,8 +16,8 @@ Stages (state in .forge/state.json, resumable; every stage is one `claude -p` se
   accept  (strong model)  ONE fresh pass over diff vs spec -> .forge/gaps.json; gaps -> writer fix round (<=2)
   report  (script)        .forge/REPORT.md, last stdout line `FORGE: done|failed`
 
-Usage: python forge_run.py <spec-dir|spec-file|ticket text> [--repo .] [--model opus] [--writer sonnet]
-       [--max-hours 8] [--max-usd 60] [--preflight] [--stream] [--no-wait] [--allow-red-base] [--assume-defaults]
+Usage: python forge_run.py <spec-dir|spec-file|ticket text> [--repo .] [--engine plain|forge] [--model opus]
+       [--writer sonnet] [--max-fix-rounds 4] [--accept] [--max-hours 8] [--max-usd 60] [--preflight] [--stream] [--no-wait] [--allow-red-base] [--assume-defaults]
   --stream   re-emit the sessions' stream-json on stdout and finish with one synthetic `result` event (bob-bench)
   --no-wait  on a rate limit emit the result and exit 3 instead of sleeping (the caller pauses and re-invokes)
   --max-outage-min  API unreachable (network/5xx): wait 30 s, 60 s, ... <=15 min per step without spending a try;
@@ -137,6 +144,38 @@ goes to `.forge/disputes.md` with the reason.
 forge_check output:
 """
 
+PLAIN_TESTS = """Turn 1 of 2 of an unattended build (the spec follows). Do NOT write production code in this turn.
+Before coding:
+(a) List the ambiguities of the spec as question lines in `.forge/requirements.md`, one per line, exactly:
+    `Q<n> [blocking|non-blocking|info]: <question> | default: <the chosen default> | cost of a wrong guess: <one phrase>`
+    `blocking` ONLY when a wrong guess would make the whole unit worthless or irreversible (data loss, external side
+    effects, public API shape); everything else gets a default and is `non-blocking`; `info` = a noteworthy assumption.
+    Repeat the lines in your final message.
+(b) Write executable acceptance tests that cover every requirement of the spec through the public interface
+    (HTTP/CLI/public API) in the repo's test layout, as NEW files only (never edit an existing file). Name the
+    requirement in the test name or a comment, assert exact values from the spec; the tests must be collectable and
+    fail until the spec is implemented. List every new test file in `.forge/acceptance-files.txt`, one repo-relative
+    path per line.
+Then stop: no production code. Finish with one line: TESTS: done
+
+SPEC:
+"""
+
+PLAIN_ANSWERS = """Human decisions arrived for your questions (binding). Update your acceptance tests accordingly: you may
+edit the test files you created in turn 1, nothing else, and write no production code. Finish with one line: TESTS: done"""
+
+PLAIN_BUILD = """Turn 2 of 2. Implement the spec. The acceptance tests of turn 1 are frozen (do not edit, delete or skip):
+FROZEN
+Rules:
+- Implement everything so that every frozen test passes; add unit tests for non-trivial rules.
+- If a frozen test contradicts the spec, do not work around it: append `- <test>: <why, with the spec quote>` to
+  `.forge/disputes.md` and implement the spec.
+- Follow existing conventions; no unrelated refactors; never weaken a gate (no disabled rules, no skipped tests, no
+  config edits).
+- Before finishing run the formatter in fix mode (FORMAT_FIX) and then every gate until all exit 0:
+GATES
+Finish with one line: BUILD: done"""
+
 ACCEPT = """You are the independent acceptance reviewer of an unattended build. You did not write this code.
 Inputs: `.forge/spec.md`, `.forge/requirements.md`, `.forge/disputes.md` (may be absent), the change
 `git diff START_SHA` (use `git diff --stat START_SHA` first, then read what matters).
@@ -201,12 +240,13 @@ def profile_snapshot(root: Path) -> dict[str, bytes | None]:
     return {n: (root / n).read_bytes() if (root / n).is_file() else None for n in PROFILE_FILES}
 
 
-def load_profile(root: Path) -> dict | None:
-    """The human-owned gate profile (powerpuff.yaml / powerpuff.gates.json) or None; ValueError = configuration error."""
-    if not any((root / n).is_file() for n in PROFILE_FILES):
+def load_profile(root: Path, path: Path | None = None) -> dict | None:
+    """The human-owned gate profile (powerpuff.yaml / powerpuff.gates.json) or None; ValueError = configuration error.
+    `path` reads a draft profile from elsewhere (never approved)."""
+    if path is None and not any((root / n).is_file() for n in PROFILE_FILES):
         return None
     try:
-        cfg = gate_guard.load_config(root, None)
+        cfg = gate_guard.load_config(root, str(path) if path else None)
     except Exception as e:  # noqa: BLE001 - bad JSON/YAML in the profile is a configuration error, not a crash
         raise ValueError(f"cannot read profile: {e}") from None
     tiers, cmds = cfg.get("gates"), cfg.get("commands")
@@ -313,6 +353,8 @@ class Run:
         self.state.setdefault("stage", "init")
         self.state.setdefault("cost", {"total_usd": 0.0, "by_model": {}, "by_stage": {}, "sessions": 0, "turns": 0})
         self.deadline = time.monotonic() + a.max_hours * 3600
+        self.state.setdefault("engine", "forge" if self.state["stage"] != "init" else getattr(a, "engine", "forge"))
+        self.engine: str = self.state["engine"]
         self.outage = Outage(getattr(a, "max_outage_min", 120))
         self.profile: dict | None = None  # raw profile config, the guard's config
         self.snapshot: dict[str, bytes | None] = {}  # profile files as they were when the gates were fixed
@@ -476,7 +518,9 @@ class Run:
         cur = exclude.read_text(encoding="utf-8") if exclude.is_file() else ""
         if ".forge/" not in cur:
             exclude.write_text(cur + "\n.forge/\n", encoding="utf-8")
-        self.state.update(stage="audit", start_sha=self.git("rev-parse", "HEAD"), writer=self.a.writer)
+        plain = self.engine == "plain"
+        self.state.update(stage="plain-tests" if plain else "audit", start_sha=self.git("rev-parse", "HEAD"),
+                          writer=self.a.model if plain else self.a.writer)
         self.save()
 
     def gates_cfg(self) -> dict:
@@ -497,6 +541,8 @@ class Run:
             prof = load_profile(self.root)
         except ValueError as e:
             raise SystemExit(self.finish("failed", f"profile: {e}")) from None
+        if not prof and getattr(self.a, "engine", "forge") == "plain":
+            prof = self.preset_draft()
         if not prof:
             return False
         self.profile = prof["config"]
@@ -504,6 +550,27 @@ class Run:
                           profile_approved=prof["approved"])
         self.fix_gates(prof["gates"], prof["format_fix"], "profile")
         return True
+
+    def preset_draft(self) -> dict | None:
+        """No powerpuff.yaml: draft the profile from the stack presets (profile_init) into .forge/; never approved."""
+        import profile_init
+        draft_path = self.forge / "powerpuff.draft.yaml"
+        if not draft_path.is_file():
+            projects = profile_init.find_projects(self.root, profile_init.load_presets())
+            draft = profile_init.build(self.root, projects) if projects else None
+            if not draft or not draft["commands"]:
+                return None
+            self.forge.mkdir(parents=True, exist_ok=True)
+            draft_path.write_text(profile_init.render(projects, draft), encoding="utf-8")
+            self.log(f"profile: none in the repo, drafted from presets -> {draft_path.relative_to(self.root).as_posix()}")
+        try:
+            prof = load_profile(self.root, draft_path)
+        except ValueError as e:
+            self.log(f"profile draft unusable: {e}")
+            return None
+        if prof:
+            prof["approved"] = False
+        return prof
 
     def write_draft(self) -> None:
         """Ready-to-approve profile from the gates the model drafted (iteration tier = all of them)."""
@@ -636,7 +703,7 @@ class Run:
         qs = self.load_questions() or []
         return " ".join(f"{c}={sum(1 for q in qs if q.get('class') == c)}" for c in Q_CLASSES)
 
-    def questions_gate(self) -> None:
+    def questions_gate(self, stage: str = "tests") -> None:
         """A blocking question without an answer is never guessed, unless --assume-defaults says so."""
         if self.state.get("questions_ok"):
             return
@@ -644,12 +711,12 @@ class Run:
             self.write_questions()
         qs = self.load_questions()
         if qs is None:
-            raise SystemExit(self.fail_resumable("questions.json is not a JSON list of questions", "tests"))
+            raise SystemExit(self.fail_resumable("questions.json is not a JSON list of questions", stage))
         open_q = [q for q in qs if q.get("class") == "blocking" and not answered(q)]
         if open_q and not self.a.assume_defaults:
             self.log("answer the blocking questions in .forge/questions.json (`answer`) and rerun, or pass --assume-defaults")
             raise SystemExit(self.fail_resumable(f"blocking questions: {','.join(str(q.get('id')) for q in open_q)}",
-                                                 "tests"))
+                                                 stage))
         if open_q:
             self.state["assumed_defaults"] = [str(q.get("id")) for q in open_q]
             self.log(f"questions: assuming defaults for {', '.join(self.state['assumed_defaults'])}")
@@ -808,8 +875,11 @@ class Run:
             self.log("tests: acceptance tests pass without an implementation, vacuous session")
             known = set(self.acceptance_files())
             before = self.dirty_snapshot()
-            self.staged("tests-vacuous", self.state["writer"], VACUOUS + self.human_decisions(),
-                        lambda: bool(set(self.acceptance_files()) - known))
+            sid = self.state.get("sid_plain")  # plain engine: the same session, forge: a fresh one
+            out = self.staged("tests-vacuous", self.state["writer"], VACUOUS + self.human_decisions(),
+                              lambda: bool(set(self.acceptance_files()) - known), resume=sid)
+            if sid and out.get("session_id"):
+                self.state["sid_plain"] = out["session_id"]
             self.keep_additive("tests-vacuous", before)
             frozen = forge_check.frozen_files(self.root)
             for f in forge_check.check_frozen(self.root, frozen)["changed_or_missing"]:
@@ -841,11 +911,15 @@ class Run:
         tampered = forge_check.check_frozen(self.root, files)["changed_or_missing"]
         for f in tampered:  # a tampered frozen test is restored before the gates run, never accepted
             self.git("checkout", self.state.get("frozen_sha", "HEAD"), "--", f)
+        if tampered:
+            self.state["frozen_violations"] = int(self.state.get("frozen_violations", 0)) + len(tampered)
         self.save()  # the checker sees the driver's state, not what a session left in state.json
         chk = forge_check.check_gates(self.root, self.a.gate_timeout, self.state.get("gates") or {}, self.gate_ctx())
         self.note_gates(chk["results"])
         rep: dict = {"coverage": forge_check.check_coverage(self.root, files),
                      "frozen": forge_check.check_frozen(self.root, files), "gates": chk, "guard": self.guard()}
+        if self.engine == "plain":  # no R lines: the tests are the requirements
+            rep["coverage"] = {"ok": True, "requirements": 0, "uncovered": []}
         if tampered:
             rep["frozen"] = {"ok": False, "files": len(files), "changed_or_missing": tampered,
                              "note": "restored from git; frozen acceptance tests must not be edited"}
@@ -936,6 +1010,132 @@ class Run:
         self.state["stage"] = "report"
         self.save()
 
+    # ---- plain engine -----------------------------------------------------------------------------
+    def plain_turn(self, stage: str, prompt: str, done=lambda: True) -> dict:  # noqa: B008
+        """One turn in the single model context: resumes `sid_plain`, remembers the session id of the answer."""
+        out = self.staged(stage, self.state["writer"], prompt, done, resume=self.state.get("sid_plain"))
+        if out.get("session_id"):
+            self.state["sid_plain"] = out["session_id"]
+            self.save()
+        return out
+
+    def plain_new_tests(self, before: dict[str, dict]) -> list[str]:
+        """New test files of the turn: untracked, not dirty before it, listed by the model or recognised as tests."""
+        try:
+            by_ext = gate_guard.build_languages(self.profile or {})
+        except gate_guard.GuardError:
+            by_ext = gate_guard.build_languages({})
+        listed = set(self.acceptance_files())
+        return sorted(f for f in self.changed_paths()[1] if f not in before["untracked"]
+                      and (f in listed or gate_guard.is_test_file(f, by_ext.get(gate_guard.ext(f)))))
+
+    def plain_before(self) -> dict[str, dict]:
+        """The dirty tree as it was before turn 1 (kept in state: a killed run guards against the same picture)."""
+        if "plain_before" not in self.state:
+            snap = self.dirty_snapshot()
+            self.state["plain_before"] = {
+                "tracked": {f: None if b is None else b.hex() for f, b in snap["tracked"].items()},
+                "untracked": snap["untracked"]}
+            self.save()
+        raw = self.state["plain_before"]
+        return {"tracked": {f: None if b is None else bytes.fromhex(b) for f, b in raw["tracked"].items()},
+                "untracked": raw["untracked"]}
+
+    def write_frozen_json(self) -> None:
+        """Run-scoped protected list for hook_protect: sessions of this run cannot edit the frozen tests."""
+        files = forge_check.frozen_files(self.root)
+        if files:
+            (self.forge / "frozen.json").write_text(json.dumps({"files": files}, indent=1), encoding="utf-8")
+
+    def plain_tests(self) -> None:
+        before = self.plain_before()
+        if not self.state.get("plain_turn1"):
+            out = self.plain_turn("plain-tests", PLAIN_TESTS + (self.forge / "spec.md").read_text(encoding="utf-8"),
+                                  lambda: bool(self.plain_new_tests(before)))
+            self.keep_additive("plain-tests", before)
+            req_path = self.forge / "requirements.md"
+            cur = req_path.read_text(encoding="utf-8") if req_path.is_file() else ""
+            qs = [x for x in out["text"].splitlines() if Q_LINE.match(x)]
+            if qs and not any(Q_LINE.match(x) for x in cur.splitlines()):
+                req_path.write_text(cur.rstrip("\n") + "\n" + "\n".join(qs) + "\n", encoding="utf-8")
+            self.write_questions()
+            self.state["plain_turn1"] = True
+            self.save()
+        self.questions_gate("plain-tests")
+        if self.human_decisions() and not self.state.get("plain_decisions_sent"):
+            self.plain_turn("plain-tests-answers", PLAIN_ANSWERS + self.human_decisions())
+            self.keep_additive("plain-tests-answers", before)
+            self.state["plain_decisions_sent"] = True
+            self.save()
+        tests = self.plain_new_tests(before)
+        if not tests:
+            raise SystemExit(self.finish("failed", "no acceptance tests written"))
+        (self.forge / "acceptance-files.txt").write_text("\n".join(tests) + "\n", encoding="utf-8")
+        self.freeze(tests)
+        self.commit_frozen("forge: acceptance tests")
+        self.write_frozen_json()
+        if "red_on_base" not in self.state:
+            self.red_on_base()
+        self.state["stage"] = "plain-build"
+        self.save()
+
+    def plain_build(self) -> None:
+        if not self.state.get("plain_built"):
+            ctx = self.gate_ctx()
+            gates = "\n".join(f"  - {n}: `{forge_check.expand(c, ctx)}`"
+                              for n, c in (self.state.get("gates") or {}).items())
+            fmt = forge_check.expand(str(self.state.get("format_fix") or "none"), ctx)
+            frozen = "\n".join(f"  - {f}" for f in forge_check.frozen_files(self.root))
+            prompt = PLAIN_BUILD.replace("FROZEN", frozen).replace("FORMAT_FIX", fmt).replace("GATES", gates) \
+                + self.human_decisions()
+            if self.state.get("plain_build_started"):
+                prompt += "\n\nA previous attempt was interrupted; inspect the tree and continue."
+            self.state["plain_build_started"] = True
+            self.save()
+            self.plain_turn("plain-build", prompt)
+            self.state["plain_built"] = True
+            self.commit("forge(plain-build)")
+            self.save()
+        while True:
+            rep = self.check()
+            rnd = int(self.state.get("plain_round", 0))
+            green = bool(rep["done"])
+            if green or rnd >= self.a.max_fix_rounds:
+                break
+            self.log(f"plain-build: red, fix round {rnd + 1}/{self.a.max_fix_rounds}")
+            self.plain_turn(f"plain-fix{rnd + 1}", FIX + failure_brief(rep))
+            self.commit(f"forge(plain-fix{rnd + 1})")
+            self.state["plain_round"] = rnd + 1
+            self.save()
+        self.state["build_green"] = green
+        self.state["stage"] = "accept"
+        self.save()
+
+    def run_plain(self) -> int:
+        if not self.adopt_profile():
+            raise SystemExit(self.finish("failed", "plain engine needs a gate profile: no powerpuff.yaml and no preset matched the stack (see docs/profile.md)"))
+        model = (self.profile or {}).get("model")
+        if not getattr(self.a, "model_given", True) and isinstance(model, str) and model.strip():
+            self.a.model = model.strip()
+        self.state["writer"] = self.a.model
+        self.save()
+        self.write_frozen_json()
+        if self.state["stage"] == "plain-tests":
+            self.base_check("plain-tests")
+            self.plain_tests()
+        if self.state["stage"] == "plain-build":
+            self.plain_build()
+        if self.state["stage"] == "accept":
+            if self.a.accept and self.state.get("build_green"):
+                self.accept()
+            self.state["stage"] = "report"
+            self.save()
+        if not self.state.get("build_green"):
+            return self.finish("failed", f"gates red after {self.state.get('plain_round', 0)} fix round(s)")
+        if self.a.final and not self.state.get("open_gaps"):
+            self.final_tier()
+        return self.finish("done")
+
     def final_tier(self) -> None:
         """--final: profile tier `final` once after acceptance is green; red = failed, the next run repeats only this."""
         cmds: dict = self.state.get("final_commands") or {}
@@ -997,7 +1197,11 @@ class Run:
                    *(f"| {r['name']} | {'pass' if r['ok'] else 'MISSING TOOL' if r['missing_tool'] else 'FAIL'} | "
                      f"{r['seconds']:.1f} |" for r in last), ""] if last else []
         lines = [f"# FORGE REPORT - {status.upper()}" + (f" ({why})" if why else ""), "",
+                 *([f"- engine: plain, fix rounds used: {self.state.get('plain_round', 0)}"]
+                   if self.engine == "plain" else []),
                  *([f"- test-writer changes reverted: {n_gone} file(s)"] if n_gone else []),
+                 *([f"- frozen test violations (restored from git): {self.state['frozen_violations']}"]
+                   if self.state.get("frozen_violations") else []),
                  *([f"- base was red (allowed by --allow-red-base): {', '.join(base_red)}"] if base_red else []),
                  f"- requirements: {len(pick('R'))}, uncovered: {rep.get('coverage', {}).get('uncovered', 'n/a')}",
                  f"- frozen tests intact: {rep.get('frozen', {}).get('ok', 'n/a')}",
@@ -1025,6 +1229,7 @@ class Run:
                  "## Open acceptance gaps", *([json.dumps(g, ensure_ascii=False) for g in open_gaps] or ["none"]), "",
                  "## Disputed / corrected acceptance tests", extra("disputes.md"), extra("unfrozen.md"), ""]
         (self.forge / "REPORT.md").write_text("\n".join(str(x) for x in lines), encoding="utf-8")
+        (self.forge / "frozen.json").unlink(missing_ok=True)
         self.state["stage"] = "finished"
         self.state["status"] = status
         self.save()
@@ -1043,6 +1248,8 @@ class Run:
             return 0 if status == "done" else 1
         if self.state["stage"] == "init":
             self.init()
+        if self.engine == "plain":
+            return self.run_plain()
         if self.state["stage"] != "audit":
             self.resume_gates()
         if self.state["stage"] == "audit":
@@ -1069,8 +1276,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("spec")
     ap.add_argument("--repo", default=".")
-    ap.add_argument("--model", default="opus", help="strong model: audit, acceptance, escalation")
+    ap.add_argument("--engine", choices=("plain", "forge"), default="plain",
+                    help="plain: one model context + script-enforced extras; forge: multi-session pipeline")
+    ap.add_argument("--model", default=None, help="strong model, default opus (plain: also writes tests and code; "
+                                                   "then the profile's `model` is the default)")
     ap.add_argument("--writer", default="sonnet", help="model that writes acceptance tests and code")
+    ap.add_argument("--max-fix-rounds", type=int, default=4, help="plain: resumes with failing gates before giving up")
+    ap.add_argument("--accept", action="store_true", help="plain: also run the independent acceptance pass at the end")
     ap.add_argument("--max-hours", type=float, default=8)
     ap.add_argument("--max-usd", type=float, default=60, help="cumulative notional budget across all sessions")
     ap.add_argument("--gate-timeout", type=int, default=1800)
@@ -1083,7 +1295,9 @@ def main() -> int:
     ap.add_argument("--assume-defaults", action="store_true", help="use defaults for unanswered blocking questions")
     ap.add_argument("--final", action="store_true", help="also run the profile tier `final` once after acceptance")
     ap.add_argument("--skip-base-check", action="store_true", help=argparse.SUPPRESS)
-    a =ap.parse_args()
+    a = ap.parse_args()
+    a.model_given = a.model is not None
+    a.model = a.model or "opus"
     for s in (sys.stdout, sys.stderr):
         s.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
     return Run(a).run()

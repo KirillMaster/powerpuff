@@ -1,6 +1,7 @@
 """PreToolUse hook (attended mode): blocks Edit/Write/MultiEdit/NotebookEdit of the profile's protected files.
 
-Silent no-op unless the project has `powerpuff.yaml` with `hooks: {protect: true}`. Exit 0 = allow, 2 = block (stderr is
+Silent no-op unless the project has `powerpuff.yaml` with `hooks: {protect: true}` or a run froze acceptance tests
+(`.forge/frozen.json`, written by forge_run's plain engine: those files are protected for the rest of the run). Exit 0 = allow, 2 = block (stderr is
 shown to the model). Applies also inside driver sessions. Env POWERPUFF_ALLOW_PROTECTED=1 (set by the human) = allow.
 See docs/attended-mode.md.
 """
@@ -61,6 +62,15 @@ def matching_glob(rel: str, globs: list[str]) -> str | None:
     return None
 
 
+def frozen_paths(root: Path) -> list[str]:
+    """Acceptance tests frozen by the current forge_run (`.forge/frozen.json`: {"files": {path: sha256}}), else []."""
+    try:
+        files = json.loads((root / ".forge" / "frozen.json").read_text(encoding="utf-8")).get("files")
+    except (OSError, ValueError, AttributeError):
+        return []
+    return [f.lower() if CASE_FOLD else f for f in files] if isinstance(files, dict) else []
+
+
 def run() -> int:
     if os.environ.get("POWERPUFF_ALLOW_PROTECTED") == "1":
         return 0
@@ -69,7 +79,10 @@ def run() -> int:
         return 0
     cwd = Path(event.get("cwd") or ".").resolve()
     root = find_root(cwd)
-    if root is None or not switch_on(hook_switches(root), "protect"):
+    if root is None:
+        return 0
+    protect, frozen = switch_on(hook_switches(root), "protect"), frozen_paths(root)
+    if not protect and not frozen:
         return 0
     tool_input = event.get("tool_input") or {}
     raw = tool_input.get("file_path") or tool_input.get("notebook_path")
@@ -77,6 +90,13 @@ def run() -> int:
         return 0
     rel = relative_target(root, cwd, str(raw))
     if rel is None:
+        return 0
+    if rel in frozen:
+        print(f"powerpuff: edit of `{rel}` blocked - it is an acceptance test frozen for this run (`.forge/frozen.json`). "
+              "Do not edit it; if it contradicts the spec, note it in `.forge/disputes.md` and implement the spec.",
+              file=sys.stderr)
+        return 2
+    if not protect:
         return 0
     import gate_guard
     config = gate_guard.load_config(root, None)

@@ -65,8 +65,8 @@ class Harness:
         env = {**os.environ, "PATH": str(self.bindir) + os.pathsep + os.environ["PATH"],
                "FAKE_CLAUDE_SCENARIO": str(self.scn), "FAKE_CLAUDE_PIDFILE": str(self.pidfile),
                "PYTHONUNBUFFERED": "1"}
-        cmd = [sys.executable, str(DRIVER), spec, "--repo", str(self.repo), "--model", "strong", "--writer", "writer",
-               "--max-hours", "0.5", *([] if self.base_check else ["--skip-base-check"]), *args]
+        cmd = [sys.executable, str(DRIVER), spec, "--repo", str(self.repo), "--engine", "forge", "--model", "strong",
+               "--writer", "writer", "--max-hours", "0.5", *([] if self.base_check else ["--skip-base-check"]), *args]
         out_p, err_p = self.tmp / f"out{self.n}.txt", self.tmp / f"err{self.n}.txt"
         with open(out_p, "w", encoding="utf-8") as so, open(err_p, "w", encoding="utf-8") as se:
             p = subprocess.Popen(cmd, cwd=cwd or self.tmp, env=env, stdout=so, stderr=se)
