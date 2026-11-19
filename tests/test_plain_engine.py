@@ -81,11 +81,21 @@ def test_no_profile_fails_before_any_session(tmp_path: Path) -> None:
 
 def test_no_profile_drafts_gates_from_stack_presets(tmp_path: Path) -> None:
     h = PH(tmp_path, None)
+    h.base_check = True
     (h.repo / "pyproject.toml").write_text("[project]\nname = 'foo'\nversion = '0.1.0'\n", encoding="utf-8")
     h.run()
     draft = h.repo / ".forge" / "powerpuff.draft.yaml"
     assert draft.is_file() and "approved: false" in draft.read_text(encoding="utf-8")
     assert "needs a gate profile" not in h.report()
+    assert "base is red" not in h.report()  # unapproved draft: gates red on the untouched base are excluded, not fatal
+
+
+def test_approved_profile_keeps_red_base_fatal(tmp_path: Path) -> None:
+    h = PH(tmp_path, "approved: true\ngates:\n  iteration: [ok, bad]\ncommands:\n  ok: 'python -c \"pass\"'\n"
+                     "  bad: 'python -c \"import sys; sys.exit(1)\"'\n")
+    h.base_check = True
+    r = h.run()
+    assert FINAL(r.out) == "FORGE: failed" and "base is red: bad" in h.report()
 
 
 def test_blocking_question_pauses_then_answers_resume_the_session(h: PH) -> None:
@@ -161,7 +171,7 @@ def test_frozen_test_edited_in_build_is_restored_and_counted(h: PH) -> None:
 
 
 def test_red_gates_resume_fix_rounds_until_green(h: PH) -> None:
-    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD}, "default"]})
+    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD, "append": {"notes.txt": "x"}}, "default"]})
     r = h.run()
     assert r.rc == 0, r.err
     assert h.stages() == ["ptests", "pbuild", "fix", "fix"]
@@ -173,15 +183,29 @@ def test_red_gates_resume_fix_rounds_until_green(h: PH) -> None:
 
 
 def test_fix_rounds_exhausted_is_failed(h: PH) -> None:
-    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD}]})
+    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD, "append": {"notes.txt": "x"}}]})
     r = h.run("Build foo", "--max-fix-rounds", "2")
     assert r.rc == 1 and FINAL(r.out) == "FORGE: failed"
     assert h.stages() == ["ptests", "pbuild", "fix", "fix"]
     assert "gates red after 2 fix round(s)" in h.report()
 
 
-def test_default_fix_rounds_is_four(h: PH) -> None:
+def test_fix_round_without_change_stops_early(h: PH) -> None:
     h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD}]})
+    r = h.run()
+    assert r.rc == 1 and FINAL(r.out) == "FORGE: failed"
+    assert h.stages().count("fix") == 1 and "gates red after 1 fix round(s)" in h.report()
+
+
+def test_resumed_session_cost_counts_only_the_increment(h: PH) -> None:
+    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD, "append": {"notes.txt": "x"}}, "default"]})
+    h.run()
+    assert h.stages() == ["ptests", "pbuild", "fix", "fix"]
+    assert h.state()["cost"]["total_usd"] == 1.0
+
+
+def test_default_fix_rounds_is_four(h: PH) -> None:
+    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD, "append": {"notes.txt": "x"}}]})
     h.run()
     assert h.stages().count("fix") == 4
 

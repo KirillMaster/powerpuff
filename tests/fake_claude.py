@@ -111,6 +111,10 @@ def main() -> int:
 
     kind = entry.get("result", "ok")
     cost = entry.get("cost", 0.25)
+    cum = counters.setdefault("_cum", {})
+    cost = round(cum.get(resume, 0) + cost, 4) if resume else cost  # like the real CLI: --resume reports the session total
+    cum[sid] = cost
+    counters_path.write_text(json.dumps(counters), encoding="utf-8")
     print(json.dumps({"type": "system", "subtype": "init", "session_id": sid}), flush=True)
     print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": f"{stage} working"}]}}),
           flush=True)

@@ -327,6 +327,16 @@ def test_duplication_excludes_honoured(tmp_path, capsys):
     assert run(capsys, root, base, "duplication", "--exclude", "src/a.py", "--exclude", "src/c.py")[0] == 0
 
 
+def test_duplication_skips_clones_inside_frozen_acceptance_tests(tmp_path, capsys):
+    root, base = dup_repo(tmp_path)
+    write(root, "tests/test_x.py", block("t", 7) + "other = 1\n" + block("t", 7))
+    assert run(capsys, root, base, "duplication")[0] == 1
+    write(root, ".forge/frozen.json", '{"files": {"tests/test_x.py": "sha"}}')
+    assert run(capsys, root, base, "duplication")[0] == 0
+    write(root, "src/b.py", block("t", 7))
+    assert run(capsys, root, base, "duplication")[0] == 1
+
+
 def test_duplication_old_duplicates_untouched_pass(tmp_path, capsys):
     root, base = dup_repo(tmp_path, {"src/old.py": block("a")})
     write(root, "docs.md", "hello\n")

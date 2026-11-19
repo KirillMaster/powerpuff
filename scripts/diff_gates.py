@@ -113,6 +113,7 @@ class Diff:
         self.code_exts = {e for e in self.by_ext if e not in MSBUILD_EXT}
         self.dup_exts = self.code_exts | (gg.SOURCE_LIKE_EXT - MSBUILD_EXT)
         self._files: list[str] | None = None
+        self.frozen = frozen_files(root)
 
     def files(self) -> list[str]:
         if self._files is None:
@@ -335,6 +336,14 @@ def gate_coverage(d: Diff, report: str, fmt: str = "auto", min_pct: float = 80.0
 
 # ---- duplication
 
+def frozen_files(root: Path) -> set[str]:
+    """Acceptance tests frozen by forge_run (`.forge/frozen.json`): the writer may not edit them, so clones inside them are not its debt."""
+    try:
+        return set((json.loads((root / ".forge" / "frozen.json").read_text(encoding="utf-8")).get("files") or {}))
+    except (OSError, ValueError, AttributeError):
+        return set()
+
+
 def dup_ok(d: Diff, rel: str, exclude) -> bool:
     return gg.ext(rel) in d.dup_exts and not any(p in DUP_EXCLUDED_DIRS for p in rel.split("/")) \
         and not GENERATED.search(rel) and not skipped(rel, exclude)
@@ -373,7 +382,7 @@ def gate_duplication(d: Diff, min_lines: int = 6, max_new: int = 0, exclude=()) 
     nums_of: dict[str, list[int]] = {}
     prepared: dict[str, tuple] = {}
     for rel in sorted(d.added):
-        p = prepare(d, rel) if dup_ok(d, rel, exclude) else None
+        p = prepare(d, rel) if dup_ok(d, rel, exclude) and rel not in d.frozen else None
         if not p:
             continue
         nums, norms = p

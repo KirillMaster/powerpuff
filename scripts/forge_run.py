@@ -417,13 +417,21 @@ class Run:
         proc.wait()
         r = result or {}
         cost = self.state["cost"]
-        spent = float(r.get("total_cost_usd") or 0)
+        # `claude -p --resume` reports the session's cumulative cost: count only the increment
+        cum = cost.setdefault("session_cum", {})
+        prev = cum.get(resume) or {} if resume else {}
+        reported = float(r.get("total_cost_usd") or 0)
+        spent = max(0.0, reported - float(prev.get("usd", 0)))
         cost["total_usd"] = round(cost["total_usd"] + spent, 4)
         cost["by_stage"][stage] = round(cost["by_stage"].get(stage, 0) + spent, 4)
         cost["sessions"] += 1
         cost["turns"] += int(r.get("num_turns") or 0)
-        for m, u in (r.get("modelUsage") or {}).items():
-            cost["by_model"][m] = round(cost["by_model"].get(m, 0) + float(u.get("costUSD") or 0), 4)
+        models = {m: float(u.get("costUSD") or 0) for m, u in (r.get("modelUsage") or {}).items()}
+        for m, v in models.items():
+            inc = max(0.0, v - float((prev.get("models") or {}).get(m, 0)))
+            cost["by_model"][m] = round(cost["by_model"].get(m, 0) + inc, 4)
+        if r.get("session_id"):
+            cum[r["session_id"]] = {"usd": reported, "models": models}
         self.save()
         raw = r.get("result")
         text: str = raw if isinstance(raw, str) else ""
@@ -548,7 +556,8 @@ class Run:
         self.profile = prof["config"]
         self.state.update(final_gates=prof["final"], final_commands=prof["final_gates"],
                           profile_approved=prof["approved"])
-        self.fix_gates(prof["gates"], prof["format_fix"], "profile")
+        excluded = set(self.state.get("gates_excluded_red_on_base") or []) if not prof["approved"] else set()
+        self.fix_gates({n: c for n, c in prof["gates"].items() if n not in excluded}, prof["format_fix"], "profile")
         return True
 
     def preset_draft(self) -> dict | None:
@@ -669,6 +678,14 @@ class Run:
                 raise SystemExit(self.fail_resumable(
                     f"base check: missing tool '{words[0] if words else gates[name]}' (gate '{name}')", stage))
         red = {n: r.get("tail", "") for n, r in res.items() if not r["ok"]}
+        if red and self.state.get("gates_source") == "profile" and not self.state.get("profile_approved") \
+                and len(red) < len(gates):
+            # an unapproved preset draft guessed commands that do not work on this repo: drop them, say so loudly
+            self.state["base_red_tails"] = red
+            self.state["gates_excluded_red_on_base"] = sorted(red)
+            self.fix_gates({n: c for n, c in gates.items() if n not in red}, self.state.get("format_fix"), "profile")
+            self.log(f"WARNING: draft profile gates red on the untouched base, excluded: {', '.join(sorted(red))}")
+            red = {}
         if red:
             self.state["base_red_tails"] = red
             if not self.a.allow_red_base:
@@ -1103,10 +1120,16 @@ class Run:
             if green or rnd >= self.a.max_fix_rounds:
                 break
             self.log(f"plain-build: red, fix round {rnd + 1}/{self.a.max_fix_rounds}")
+            head = self.git("rev-parse", "HEAD")
             self.plain_turn(f"plain-fix{rnd + 1}", FIX + failure_brief(rep))
             self.commit(f"forge(plain-fix{rnd + 1})")
             self.state["plain_round"] = rnd + 1
             self.save()
+            if self.git("rev-parse", "HEAD") == head:
+                self.log(f"plain-fix{rnd + 1}: no change to the tree - stopping fix rounds (see .forge/disputes.md)")
+                rep = self.check()
+                green = bool(rep["done"])
+                break
         self.state["build_green"] = green
         self.state["stage"] = "accept"
         self.save()
@@ -1172,6 +1195,8 @@ class Run:
         guard = rep.get("guard") or {}
         trust = {"profile": "approved profile" if self.state.get("profile_approved") else "profile not approved",
                  "model-draft": DRAFT_NOTE}.get(self.state.get("gates_source", ""), "")
+        if self.state.get("gates_excluded_red_on_base"):
+            trust += "; red on the untouched base, excluded: " + ", ".join(self.state["gates_excluded_red_on_base"])
         gates = ", ".join(f"{k}={'pass' if v['ok'] else 'FAIL'}"
                           for k, v in (rep.get("gates", {}).get("results") or {}).items())
         red = self.state.get("red_on_base")
