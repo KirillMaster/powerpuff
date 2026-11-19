@@ -107,6 +107,31 @@ def test_draft_profile_gate_with_missing_tool_is_excluded(tmp_path: Path) -> Non
     assert "excluded: gone" in h.report()
 
 
+def test_setup_runs_once_before_the_base_check(tmp_path: Path) -> None:
+    h = PH(tmp_path, "approved: true\ngates:\n  iteration: [dep]\ncommands:\n"
+                     "  dep: python -c \"import os, sys; sys.exit(0 if os.path.isfile('dep.txt') else 1)\"\n"
+                     "setup: python -c \"open('dep.txt', 'w').write('x')\"\n")
+    h.base_check = True
+    r = h.run()
+    assert r.rc == 0, h.report()
+    assert h.state()["setup_done"] is True and "setup: ok" in (h.repo / ".forge" / "progress.md").read_text(encoding="utf-8")
+
+
+def test_setup_failure_is_fatal_for_approved_and_a_warning_for_draft(tmp_path: Path) -> None:
+    prof = "gates:\n  iteration: [ok]\ncommands:\n  ok: 'python -c \"pass\"'\nsetup: 'python -c \"import sys; sys.exit(3)\"'\n"
+    (tmp_path / "a").mkdir()
+    (tmp_path / "d").mkdir()
+    h = PH(tmp_path / "a", "approved: true\n" + prof)
+    h.base_check = True
+    r = h.run()
+    assert FINAL(r.out) == "FORGE: failed" and "setup failed" in h.report()
+    d = PH(tmp_path / "d", "approved: false\n" + prof)
+    d.base_check = True
+    r = d.run()
+    assert r.rc == 0, r.err
+    assert "setup failed:" in d.report()
+
+
 def test_approved_profile_missing_tool_stays_fatal(tmp_path: Path) -> None:
     h = PH(tmp_path, "approved: true\ngates:\n  iteration: [ok, gone]\ncommands:\n  ok: 'python -c \"pass\"'\n"
                      "  gone: 'no-such-tool-pp --check'\n")

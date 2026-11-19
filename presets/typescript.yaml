@@ -26,6 +26,7 @@ commands:
   mutation: '{pmx} stryker run'
   duplication-semantic: '{pmx} jscpd --threshold 3 src'
 format_fix: '{pmx} prettier --write .'
+setup: '{pmi}'
 needs:
   typecheck: "file:tsconfig.json+dep:typescript"
   lint: "script:lint"

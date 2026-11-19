@@ -10,6 +10,7 @@
 | `gates` | map уровень → список id | `iteration` (секунды–минуты, на каждую итерацию), `unit` (перед «готово»), `final` (конец прогона, тяжёлые) | `forge_run` (iteration + unit = проверка «готово», `final` по `--final`), `queue_run` (`final`), `hook_stop` (`iteration`), `quality_report` (любой) |
 | `commands` | map id → команда | команда гейта, код выхода 0 = пройден; нет инструмента = провал | те же |
 | `format_fix` | строка | форматтер в режиме правки; писатель запускает перед гейтами | `forge_run` |
+| `setup` | строка | установка зависимостей (`npm install`, `pip install -r requirements.txt`, `dotnet restore`); один раз до проверки базы | `forge_run` |
 | `protected` | список glob | защищённые файлы (линтеры, анализаторы, CI): правка = нарушение; добавляется к списку по умолчанию | `gate_guard`, `hook_protect` |
 | `unprotected` | список glob | убрать glob из списка по умолчанию | `gate_guard` |
 | `allow_suppressions` | список `{rule, file, pattern}` | разрешённые подавления предупреждений | `gate_guard` |

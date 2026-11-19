@@ -196,6 +196,8 @@ def prefixes(projects: list[Project]) -> dict[int, str]:
 def render_command(cmd: str, p: Project, plugin: str | None, scoped: bool = True) -> str:
     if plugin:
         cmd = cmd.replace("{plugin}", plugin)
+    cmd = cmd.replace("{pmi}", {"npm": "npm install --no-audit --no-fund", "pnpm": "pnpm install",
+                                "yarn": "yarn install"}[p.pm()])
     cmd = cmd.replace("{pmx}", {"npm": "npx --no-install", "pnpm": "pnpm exec", "yarn": "yarn"}[p.pm()]) \
         .replace("{pm}", p.pm())
     if not p.rel or not scoped:
@@ -211,6 +213,7 @@ def build(root: Path, projects: list[Project], plugin: str | None = None) -> dic
     gates: dict[str, list[str]] = {t: [] for t in TIERS}
     commands: dict[str, str] = {}
     fixes: list[str] = []
+    setups: list[str] = []
     protected: list[str] = []
     test_gates: list[str] = []
     dropped: list[tuple[str, str, str]] = []
@@ -239,11 +242,15 @@ def build(root: Path, projects: list[Project], plugin: str | None = None) -> dic
         fix = p.preset.get("format_fix")
         if isinstance(fix, str) and not (needs.get("format_fix") and p.missing(str(needs["format_fix"]))):
             fixes.append(render_command(fix, p, plugin))
+        setup = p.preset.get("setup")
+        if isinstance(setup, str) and not (needs.get("setup") and p.missing(str(needs["setup"]))):
+            setups.append(render_command(setup, p, plugin))
         for g in listing(p.preset.get("protected")):
             for item in ([g] if not p.rel else [f"{p.rel}/{g}", g]):
                 if item not in protected:
                     protected.append(item)
-    return {"gates": gates, "commands": commands, "format_fix": " && ".join(fixes) or None, "protected": protected,
+    return {"gates": gates, "commands": commands, "format_fix": " && ".join(fixes) or None,
+            "setup": " && ".join(setups) or None, "protected": protected,
             "test_gates": test_gates, "dropped": dropped}
 
 
@@ -270,6 +277,8 @@ def render(projects: list[Project], draft: dict) -> str:
     lines += [f"  {key(g)}: {yq(c)}" for g, c in draft["commands"].items()]
     if draft["format_fix"]:
         lines.append(f"format_fix: {yq(draft['format_fix'])}")
+    if draft.get("setup"):
+        lines.append(f"setup: {yq(draft['setup'])}")
     if draft["test_gates"]:
         lines.append(f"test_gates: [{', '.join(draft['test_gates'])}]")
     lines.append(f"protected: [{', '.join(yq(g) for g in draft['protected'])}]")

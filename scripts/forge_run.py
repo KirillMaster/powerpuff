@@ -558,8 +558,9 @@ class Run:
         if not prof:
             return False
         self.profile = prof["config"]
+        setup = (prof["config"] or {}).get("setup")
         self.state.update(final_gates=prof["final"], final_commands=prof["final_gates"],
-                          profile_approved=prof["approved"])
+                          profile_approved=prof["approved"], setup=setup if isinstance(setup, str) and setup.strip() else None)
         excluded = set(self.state.get("gates_excluded_red_on_base") or []) if not prof["approved"] else set()
         self.fix_gates({n: c for n, c in prof["gates"].items() if n not in excluded}, prof["format_fix"], "profile")
         return True
@@ -664,6 +665,24 @@ class Run:
         (self.forge / "quality-report.json").write_text(json.dumps(rep, indent=1, ensure_ascii=False) + "\n",
                                                          encoding="utf-8")
 
+    def run_setup(self, stage: str) -> None:
+        """Profile `setup` (install dependencies) once, before the base check: gates on a fresh clone need it."""
+        cmd = self.state.get("setup")
+        if not cmd or self.state.get("setup_done"):
+            return
+        r = forge_check.check_gates(self.root, max(self.a.gate_timeout, 900), {"setup": cmd},
+                                    self.gate_ctx(head=True))["results"]["setup"]
+        self.state["setup_done"] = True
+        self.save()
+        if r["ok"]:
+            self.log(f"setup: ok ({r.get('seconds', 0)} s)")
+            return
+        if self.state.get("profile_approved"):
+            self.state["base_red_tails"] = {"setup": r.get("tail", "")}
+            raise SystemExit(self.fail_resumable(f"setup failed: {cmd}", stage))
+        self.state["setup_failed"] = cmd
+        self.log(f"WARNING: draft profile setup failed, continuing: {cmd}")
+
     def base_check(self, stage: str) -> None:
         """All active gates once on the untouched base tree, before anything is spent on it."""
         if "base_checked" in self.state:
@@ -672,6 +691,7 @@ class Run:
             self.state["base_checked"] = "skipped"
             self.save()
             return
+        self.run_setup(stage)
         gates: dict = self.state.get("gates") or {}
         res = self.note_gates(forge_check.check_gates(self.root, self.a.gate_timeout, gates,
                                                       self.gate_ctx(head=True))["results"]) if gates else {}
@@ -1215,6 +1235,8 @@ class Run:
         guard = rep.get("guard") or {}
         trust = {"profile": "approved profile" if self.state.get("profile_approved") else "profile not approved",
                  "model-draft": DRAFT_NOTE}.get(self.state.get("gates_source", ""), "")
+        if self.state.get("setup_failed"):
+            trust += f"; setup failed: {self.state['setup_failed']}"
         if self.state.get("gates_excluded_red_on_base"):
             trust += "; red on the untouched base, excluded: " + ", ".join(self.state["gates_excluded_red_on_base"])
         gates = ", ".join(f"{k}={'pass' if v['ok'] else 'FAIL'}"

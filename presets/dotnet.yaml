@@ -20,7 +20,9 @@ commands:
   qg-pr: 'qg pr'
   qg-mutation: 'qg mutation-diff'
 format_fix: 'dotnet format'
+setup: 'dotnet restore'
 needs:
+  setup: "tool:dotnet"
   build: "tool:dotnet"
   format: "tool:dotnet"
   format_fix: "tool:dotnet"

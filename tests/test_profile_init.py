@@ -46,7 +46,7 @@ def test_presets_are_complete():
         ids = [g for t in profile_init.TIERS for g in cfg["gates"].get(t, [])]
         assert set(ids) <= set(cfg["commands"]), stack
         assert set(cfg["commands"]) == set(ids), stack
-        assert set(cfg["needs"]) - {"format_fix"} <= set(ids), stack
+        assert set(cfg["needs"]) - {"format_fix", "setup"} <= set(ids), stack
         assert set(cfg["test_gates"]) <= set(ids), stack
         assert cfg["detect"] and cfg["protected"] and cfg["format_fix"], stack
         assert all("{plugin}" not in c or '"{plugin}/scripts/diff_gates.py"' in c for c in cfg["commands"].values())
@@ -109,6 +109,7 @@ def test_typescript_uses_package_scripts_and_lockfile(tmp_path, monkeypatch, cap
     assert prof["gates"]["coverage-vitest"].startswith("pnpm exec vitest run --coverage")
     assert "lint-eslint" not in prof["gates"] and "coverage-jest" not in prof["gates"]
     assert prof["format_fix"] == "pnpm exec prettier --write ."
+    assert prof["config"]["setup"] == "pnpm install"
     assert "mutation" in out and "#   mutation:" in out
 
 

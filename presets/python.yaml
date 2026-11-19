@@ -22,7 +22,9 @@ commands:
   tests-full: 'python -m pytest -q -p no:cacheprovider'
   mutation: 'mutmut run'
 format_fix: 'ruff format .'
+setup: 'python -m pip install -q -r requirements.txt'
 needs:
+  setup: "file:requirements.txt"
   syntax: "tool:python"
   lint: "file:ruff.toml|.ruff.toml|has:pyproject.toml~tool.ruff|has:requirements*.txt~ruff"
   format: "file:ruff.toml|.ruff.toml|has:pyproject.toml~tool.ruff|has:requirements*.txt~ruff"
