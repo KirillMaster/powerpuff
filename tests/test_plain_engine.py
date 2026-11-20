@@ -254,6 +254,22 @@ def test_uncovered_spec_ids_get_one_cover_turn(h: PH) -> None:
     assert "R3" in h.of("pcover")[0]["prompt"] and "requirements: 3, uncovered: []" in h.report()
 
 
+def test_yamlkit_ids_are_requirements(tmp_path: Path, h: PH) -> None:
+    spec = tmp_path / "spec-dir"
+    spec.mkdir()
+    (spec / "spec.yaml").write_text(
+        'user_stories:\n  - id: "US1"\n    acceptance_scenarios:\n      - id: "AS-1"\n        then: "foo is 42"\n'
+        '      - id: "AS-2"\n        then: "bar is 7"\nfunctional_requirements:\n  - id: "FR-010"\n    text: "baz"\n',
+        encoding="utf-8")
+    h.scenario({"pcover": [{"write": {"tests/test_more.py": "def test_more():\n    # AS-1 AS-2 FR-010\n    pass\n"}}]})
+    r = h.run(str(spec))
+    assert r.rc == 0, r.err
+    assert h.stages() == ["ptests", "pcover", "pbuild"]
+    prompt = h.of("pcover")[0]["prompt"]
+    assert "AS-1" in prompt and "FR-010" in prompt and "US1" not in prompt
+    assert "requirements: 3, uncovered: []" in h.report()
+
+
 def test_uncovered_spec_id_left_is_reported_not_fatal(h: PH) -> None:
     r = h.run("R1: foo returns 42\nR3: baz exists")
     assert r.rc == 0, r.err

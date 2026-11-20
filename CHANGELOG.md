@@ -5,7 +5,7 @@
 - No `powerpuff.yaml`: gates drafted from the stack presets into `.forge/powerpuff.draft.yaml` (not approved); gates red on the untouched base are excluded from a draft and listed in the report, an approved profile keeps a red base fatal.
 - Fix rounds stop when a round leaves the tree unchanged.
 - Profile `setup` (dependency install) runs once before the base check; presets fill it for TypeScript, Python (requirements.txt) and .NET. A draft gate whose tool is missing is excluded like a red-on-base gate.
-- Spec `R<n>` ids not named by any acceptance test get one cover turn before the freeze; the rest is reported as `uncovered`.
+- Spec `R<n>` ids and yamlkit ids (`AS-n`, `AC-n`, `FR-n`) not named by any acceptance test get one cover turn before the freeze; the rest is reported as `uncovered`.
 - `diff_gates duplication` ignores clones inside frozen acceptance tests (still catches copies from them into code).
 - Fix: resumed sessions were costed with the session's cumulative `total_cost_usd`; only the increment is counted now.
 

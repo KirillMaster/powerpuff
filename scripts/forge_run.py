@@ -58,6 +58,7 @@ API_5XX = re.compile(r"\b(?:api error|http|status)\W{0,3}5\d\d\b|\b5\d\d (?:inte
 BACKOFF_START_S, BACKOFF_CAP_S = 30, 900
 EPOCH = re.compile(r"\|\s*(\d{10})\b")
 CLOCK = re.compile(r"\bresets?(?:\s+at)?\s+(\d{1,2})(?::(\d{2}))?\s*([ap]m)\b", re.IGNORECASE)
+YAMLKIT_ID = re.compile(r"\bid:\s*[\"']?((?:AS|AC|FR)-\d+)\b")
 SPEC_FILES = ("spec.yaml", "spec.md", "plan.yaml", "plan.md", "tasks.yaml", "tasks.md", "contracts.yaml",
               "data-model.yaml")
 TEST_INFRA = ("*.csproj", "*.sln", "*.slnx", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
@@ -1083,13 +1084,16 @@ class Run:
                 "untracked": raw["untracked"]}
 
     def spec_coverage(self, files) -> dict:
-        """`R<n>` ids of the spec (lines `R1: ...` / `- R1: ...`) that no acceptance test names."""
+        """Requirement ids of the spec that no acceptance test names: `R<n>` lines (`R1: ...` / `- R1: ...`) and yamlkit
+        ids (`id: "AS-1"` acceptance scenarios, `AC-n` acceptance criteria, `FR-nnn` functional requirements)."""
         spec = self.forge / "spec.md"
         raw = spec.read_text(encoding="utf-8") if spec.is_file() else ""
-        ids = sorted(set(forge_check.R_LINE.findall(raw)), key=lambda x: int(x[1:]))
+        found = set(forge_check.R_LINE.findall(raw)) | set(YAMLKIT_ID.findall(raw))
+        ids = sorted(found, key=lambda x: (re.sub(r"[-\d]", "", x), int(re.sub(r"\D", "", x))))
         text = "\n".join((self.root / f).read_text(encoding="utf-8", errors="replace")
                          for f in files if (self.root / f).is_file())
-        return {"requirements": len(ids), "uncovered": [r for r in ids if not re.search(rf"\b{r}\b", text)]}
+        return {"requirements": len(ids),
+                "uncovered": [r for r in ids if not re.search(rf"(?<![\w-]){re.escape(r)}(?![\w])", text)]}
 
     def write_frozen_json(self) -> None:
         """Run-scoped protected list for hook_protect: sessions of this run cannot edit the frozen tests."""
