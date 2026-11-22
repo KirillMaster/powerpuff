@@ -42,13 +42,13 @@ def h(tmp_path: Path) -> PH:
     return PH(tmp_path)
 
 
-def test_happy_path_one_context(h: PH) -> None:
+def test_happy_path_tests_then_a_fresh_build_session(h: PH) -> None:
     r = h.run()
     assert r.rc == 0, r.err
     assert FINAL(r.out) == "FORGE: done"
     assert h.stages() == ["ptests", "pbuild"]
     t1, t2 = h.calls()
-    assert not t1["has_resume"] and t2["resume"] == t1["session_id"]
+    assert not t1["has_resume"] and not t2["has_resume"] and "Build foo" in t2["prompt"]
     assert {c["model"] for c in h.calls()} == {"strong"}
     assert t1["prompt"].endswith("Build foo") and "[blocking|non-blocking|info]" in t1["prompt"]
     assert "tests/test_acceptance.py" in t2["prompt"] and GATE in t2["prompt"]
@@ -155,7 +155,7 @@ def test_blocking_question_pauses_then_answers_resume_the_session(h: PH) -> None
     assert h.stages() == ["ptests", "panswers", "pbuild"]
     ans, build = h.of("panswers")[0], h.of("pbuild")[0]
     assert ans["resume"] == h.of("ptests")[0]["session_id"] and "postgres" in ans["prompt"]
-    assert build["resume"] == ans["session_id"] and "postgres" in build["prompt"]
+    assert not build["has_resume"] and "postgres" in build["prompt"]
 
 
 def test_assume_defaults_goes_on(h: PH) -> None:
@@ -196,7 +196,7 @@ def test_vacuous_tests_resume_the_same_session(tmp_path: Path) -> None:
     assert r.rc == 0, r.err
     assert h.stages() == ["ptests", "vacuous", "pbuild"]
     assert h.of("vacuous")[0]["resume"] == h.of("ptests")[0]["session_id"]
-    assert h.of("pbuild")[0]["resume"] == h.of("vacuous")[0]["session_id"]
+    assert not h.of("pbuild")[0]["has_resume"]
     assert h.state()["red_on_base"] is False
     assert "tests/test_acceptance_vacuous.py" in (h.repo / ".forge" / "frozen.sha256").read_text(encoding="utf-8")
 
@@ -236,7 +236,7 @@ def test_fix_round_without_change_stops_early(h: PH) -> None:
     h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD}]})
     r = h.run()
     assert r.rc == 1 and FINAL(r.out) == "FORGE: failed"
-    assert h.stages().count("fix") == 1 and "gates red after 1 fix round(s)" in h.report()
+    assert h.stages().count("fix") == 1 and "stuck: fix round 1 changed nothing" in h.report()
 
 
 def test_resumed_session_cost_counts_only_the_increment(h: PH) -> None:
@@ -322,7 +322,7 @@ def test_killed_driver_resumes_at_the_right_step(h: PH, stage: str) -> None:
     assert {s: h.stages().count(s) for s in expected} == expected
     first = h.of("ptests")[0]
     if stage == "pbuild":
-        assert h.of("pbuild")[1]["resume"] == first["session_id"]
+        assert not h.of("pbuild")[1]["has_resume"] and first["session_id"]
         assert "previous attempt was interrupted" in h.of("pbuild")[1]["prompt"]
     if stage == "fix":
         assert h.of("fix")[1]["resume"] == h.of("pbuild")[0]["session_id"]

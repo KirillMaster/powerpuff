@@ -78,7 +78,7 @@ elif stage in ("implement", "fix", "gapfix"):
         kind, cost = "rate_limit", 0
     else:
         put(out_file, "ok\n")
-        if "fail" in dirs:
+        if "fail" in dirs or ("fail_once" in dirs and "Previous attempt" not in spec):
             put("broken.flag", "1\n")
         if "shared" in dirs:
             put("shared.txt", "unit side\n")
@@ -298,7 +298,7 @@ def test_happy_path(h: QH) -> None:
 def test_failure_blocks_dependents_only(h: QH) -> None:
     units = [unit("U1", fake=("fail",)), unit("U2", deps=("U1",)), unit("U3"), unit("U4", risk="high"),
              unit("U5", deps=("U4",))]
-    r = h.run(h.queue(units))
+    r = h.run(h.queue(units, max_attempts=1))
     assert r.rc == 2, r.out
     assert r.last == "QUEUE: partial"
     assert h.statuses() == {"U1": "failed", "U2": "blocked", "U3": "merged", "U4": "done", "U5": "blocked"}
@@ -360,7 +360,7 @@ def test_assume_defaults_must_be_bool(h: QH) -> None:
 
 
 def test_merge_conflict_fails_unit_and_continues(h: QH) -> None:
-    r = h.run(h.queue([unit("U1", fake=("shared", "push=x")), unit("U2")]))
+    r = h.run(h.queue([unit("U1", fake=("shared", "push=x")), unit("U2")], max_attempts=1))
     assert r.rc == 2, r.out
     assert h.statuses() == {"U1": "failed", "U2": "merged"}
     assert h.state()["units"]["U1"]["reason"] == "merge conflict"

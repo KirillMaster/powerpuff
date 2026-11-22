@@ -50,7 +50,8 @@ import gate_guard  # noqa: E402
 
 PROFILE_FILES = ("powerpuff.yaml", "powerpuff.gates.json")
 DRAFT_NOTE = "NOT APPROVED (chosen by the model; review .forge/powerpuff.draft.yaml and save it as powerpuff.yaml)"
-RATE = ("usage limit", "rate limit", "429", "overloaded")
+RATE = ("usage limit", "rate limit", "429", "overloaded", "hit your", "5-hour limit", "weekly limit")
+SPEC_INLINE_MAX = 30000
 API_PAUSE = "FORGE: paused (API unreachable)"
 API_TEXT = ("can't reach the api server", "connection_failed", "enotfound", "econnreset", "etimedout", "eai_again")
 API_5XX = re.compile(r"\b(?:api error|http|status)\W{0,3}5\d\d\b|\b5\d\d (?:internal server|bad gateway|service unavailable"
@@ -139,10 +140,21 @@ Finish with one line: BUILD: done"""
 
 FIX = """The deterministic check failed. Fix the causes (same rules: frozen tests untouched, gates never weakened),
 re-run the gates until green, then finish with: BUILD: done
+If a frozen test contradicts the spec, append `- <test>: <why, with the spec quote>` to `.forge/disputes.md` instead.
 Guard violations (`guard` in the output) must be removed, not worked around; a suppression that is truly required
 goes to `.forge/disputes.md` with the reason.
+"""
+FIX_OUTPUT = "\nforge_check output:\n"
 
-forge_check output:
+FIX_HANDOFF = """
+You take over an unattended build from another session. Spec: `.forge/spec.md` (read it first); question lines and
+defaults: `.forge/requirements.md`; disputes so far: `.forge/disputes.md` (may be absent). Frozen acceptance tests (never
+edit them):
+FROZEN
+Changes so far (`git diff --stat START_SHA`):
+DIFFSTAT
+Gates (all must exit 0; formatter in fix mode first: FORMAT_FIX):
+GATES
 """
 
 PLAIN_TESTS = """Turn 1 of 2 of an unattended build (the spec follows). Do NOT write production code in this turn.
@@ -169,8 +181,10 @@ PLAIN_COVER = """These requirement ids of the spec are not named in any acceptan
 them (new files, or the test files you created in this run), naming the id in the test name or a comment. No
 production code. Finish with one line: TESTS: done"""
 
-PLAIN_BUILD = """Turn 2 of 2. Implement the spec. The acceptance tests of turn 1 are frozen (do not edit, delete or skip):
+PLAIN_BUILD = """Turn 2 of 2. Implement the spec. A previous session wrote the acceptance tests and they are frozen (do not
+edit, delete or skip):
 FROZEN
+Question lines and their defaults: `.forge/requirements.md`. SPEC_REF
 Rules:
 - Implement everything so that every frozen test passes; add unit tests for non-trivial rules.
 - If a frozen test contradicts the spec, do not work around it: append `- <test>: <why, with the spec quote>` to
@@ -212,6 +226,22 @@ def reset_wait_s(text: str, fallback_min: float = 15) -> float:
             at += timedelta(days=1)
         return (at - local).total_seconds() + 60
     return fallback_min * 60
+
+
+def note_rate(info: dict) -> None:
+    """Latest rate-limit state of the account for the caller (queue_run throttles parallel units on it)."""
+    path = os.environ.get("POWERPUFF_RATE_FILE")
+    if not path or not isinstance(info, dict):
+        return
+    win = (info.get("unifiedWindows") or {}).get(info.get("rateLimitType") or "five_hour") or {}
+    data = {"status": info.get("status"), "type": info.get("rateLimitType"), "resets_at": info.get("resetsAt"),
+            "utilization": win.get("utilization"), "at": int(time.time())}
+    try:
+        tmp = Path(f"{path}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def sha(obj: object) -> str:
@@ -395,7 +425,7 @@ class Run:
         if self.state["cost"]["total_usd"] >= self.a.max_usd:
             raise SystemExit(self.finish("failed", "cost budget exhausted"))
         argv = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", model,
-                "--permission-mode", self.a.permission_mode]
+                "--permission-mode", self.a.permission_mode, "--strict-mcp-config"]
         argv += ["--resume", resume] if resume else []
         self.log(f"{stage}: session start ({model}{', resume' if resume else ''})")
         proc = subprocess.Popen(argv, cwd=self.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -404,14 +434,21 @@ class Run:
         assert proc.stdin and proc.stdout
         proc.stdin.write(prompt)
         proc.stdin.close()
-        result, tail, api_msg = None, [], False
+        result, tail, api_msg, limited = None, [], False, 0
         for line in proc.stdout:
             try:
                 ev = json.loads(line)
             except ValueError:
                 tail = (tail + [line.strip()])[-20:]
                 continue
-            if isinstance(ev, dict) and ev.get("type") == "assistant" and ev.get("is_api_error_message"):
+            if isinstance(ev, dict) and ev.get("type") == "rate_limit_event":
+                info = ev.get("rate_limit_info") or {}
+                note_rate(info)
+                if info.get("status") == "rejected":
+                    limited = int(info.get("resetsAt") or 0) or int(time.time()) + 900
+            if isinstance(ev, dict) and ev.get("type") == "assistant" and ev.get("error") == "rate_limit":
+                limited = limited or int(time.time()) + 900
+            elif isinstance(ev, dict) and ev.get("type") == "assistant" and ev.get("is_api_error_message"):
                 api_msg = True
             if isinstance(ev, dict) and ev.get("type") == "result":
                 result = ev
@@ -441,6 +478,8 @@ class Run:
         raw = r.get("result")
         text: str = raw if isinstance(raw, str) else ""
         kind = failure_kind(result, text, tail, api_msg)
+        if limited and (kind or not result or r.get("is_error")):
+            raise RateLimited(f"{text}\n" + "\n".join(tail) + f"\nrate limit rejected, resets |{limited}")
         if kind == "rate":
             raise RateLimited(text + "\n" + "\n".join(tail))
         if kind == "api":
@@ -465,6 +504,8 @@ class Run:
                 wait = min(reset_wait_s(e.text), max(0.0, self.deadline - time.monotonic()))
                 self.log(f"{stage}: rate limited, sleeping {wait / 60:.0f} min")
                 time.sleep(wait)
+                if not resume and "inspect the tree" not in prompt:
+                    prompt += "\n\nA previous attempt was interrupted; inspect the tree and continue."
                 continue  # a rate limit does not consume a try
             except ApiUnreachable as e:
                 self.api_wait(stage, e.text)
@@ -689,6 +730,7 @@ class Run:
         if "base_checked" in self.state:
             return
         if self.a.skip_base_check:
+            self.run_setup(stage)
             self.state["base_checked"] = "skipped"
             self.save()
             return
@@ -999,7 +1041,7 @@ class Run:
             self.save()
             if rep["done"]:
                 return True
-            prompt = FIX + failure_brief(rep)
+            prompt = FIX + FIX_OUTPUT + failure_brief(rep)
             if not sid:
                 prompt = self.build_prompt() + "\n\n" + prompt
         if self.state["writer"] != self.a.model and not self.state.get(f"esc_{stage}"):
@@ -1140,43 +1182,105 @@ class Run:
         self.state["stage"] = "plain-build"
         self.save()
 
+    def gate_lines(self) -> tuple[str, str]:
+        ctx = self.gate_ctx()
+        gates = "\n".join(f"  - {n}: `{forge_check.expand(c, ctx)}`" for n, c in (self.state.get("gates") or {}).items())
+        return gates, forge_check.expand(str(self.state.get("format_fix") or "none"), ctx)
+
+    def frozen_lines(self) -> str:
+        return "\n".join(f"  - {f}" for f in forge_check.frozen_files(self.root))
+
+    def spec_ref(self) -> str:
+        spec = self.forge / "spec.md"
+        text = spec.read_text(encoding="utf-8") if spec.is_file() else ""
+        if len(text) <= SPEC_INLINE_MAX:
+            return "The spec (also in `.forge/spec.md`):\n\n" + text.strip() + "\n"
+        return "The spec is in `.forge/spec.md`: read it first, then the files it points to as needed."
+
+    def model_for(self, step: str) -> str:
+        """plain engine: `build` / `fix` model = CLI, else profile `model_build` / `model_fix`, else build -> the main
+        model and fix -> the build model."""
+        cli = getattr(self.a, f"model_{step}", None)
+        prof = (self.profile or {}).get(f"model_{step}")
+        if cli:
+            return str(cli)
+        if isinstance(prof, str) and prof.strip():
+            return prof.strip()
+        return self.model_for("build") if step == "fix" else self.state["writer"]
+
+    def fix_handoff(self) -> str:
+        gates, fmt = self.gate_lines()
+        stat = self.git("diff", "--stat", self.state["start_sha"], "--", ".", ":!.forge")[-3000:] or "(none)"
+        return FIX_HANDOFF.replace("FROZEN", self.frozen_lines()).replace("START_SHA", self.state["start_sha"]) \
+            .replace("DIFFSTAT", stat).replace("FORMAT_FIX", fmt).replace("GATES", gates)
+
     def plain_build(self) -> None:
         if not self.state.get("plain_built"):
-            ctx = self.gate_ctx()
-            gates = "\n".join(f"  - {n}: `{forge_check.expand(c, ctx)}`"
-                              for n, c in (self.state.get("gates") or {}).items())
-            fmt = forge_check.expand(str(self.state.get("format_fix") or "none"), ctx)
-            frozen = "\n".join(f"  - {f}" for f in forge_check.frozen_files(self.root))
-            prompt = PLAIN_BUILD.replace("FROZEN", frozen).replace("FORMAT_FIX", fmt).replace("GATES", gates) \
-                + self.human_decisions()
+            gates, fmt = self.gate_lines()
+            prompt = PLAIN_BUILD.replace("FROZEN", self.frozen_lines()).replace("FORMAT_FIX", fmt) \
+                .replace("GATES", gates).replace("SPEC_REF", self.spec_ref()) + self.human_decisions()
+            sid = self.state.get("sid_build")
             if self.state.get("plain_build_started"):
-                prompt += "\n\nA previous attempt was interrupted; inspect the tree and continue."
+                prompt = "Turn 2 of 2 (continued). A previous attempt was interrupted; inspect the tree and continue." \
+                    if sid else prompt + "\n\nA previous attempt was interrupted; inspect the tree and continue."
             self.state["plain_build_started"] = True
             self.save()
-            self.plain_turn("plain-build", prompt)
+            model = self.model_for("build")
+            out = self.staged("plain-build", model, prompt, lambda: True, resume=sid)
+            self.state.update(sid_build=out.get("session_id") or sid, sid_build_model=model)
+            if not out["ok"]:
+                self.commit("forge(plain-build, unfinished)")
+                raise SystemExit(self.fail_resumable("build session ended with an error", "plain-build"))
             self.state["plain_built"] = True
             self.commit("forge(plain-build)")
             self.save()
+        if self.state.pop("stuck_round", None) is not None:
+            self.state["max_rounds_extra"] = int(self.state.get("max_rounds_extra", 0)) + 1
+            self.save()
+        rounds = self.a.max_fix_rounds + int(self.state.get("max_rounds_extra", 0))
         while True:
             rep = self.check()
             rnd = int(self.state.get("plain_round", 0))
             green = bool(rep["done"])
-            if green or rnd >= self.a.max_fix_rounds:
+            if green or rnd >= rounds:
                 break
-            self.log(f"plain-build: red, fix round {rnd + 1}/{self.a.max_fix_rounds}")
+            self.log(f"plain-build: red, fix round {rnd + 1}/{rounds}")
             head = self.git("rev-parse", "HEAD")
-            self.plain_turn(f"plain-fix{rnd + 1}", FIX + failure_brief(rep))
+            self.fix_round(rnd + 1, rep)
             self.commit(f"forge(plain-fix{rnd + 1})")
             self.state["plain_round"] = rnd + 1
             self.save()
             if self.git("rev-parse", "HEAD") == head:
-                self.log(f"plain-fix{rnd + 1}: no change to the tree - stopping fix rounds (see .forge/disputes.md)")
-                rep = self.check()
-                green = bool(rep["done"])
-                break
+                self.log(f"plain-fix{rnd + 1}: no change to the tree - stuck, needs a human (see .forge/disputes.md)")
+                if self.check()["done"]:
+                    green = True
+                    break
+                self.state["stuck_round"] = rnd + 1
+                raise SystemExit(self.fail_resumable(
+                    f"stuck: fix round {rnd + 1} changed nothing; answer .forge/disputes.md "
+                    f"(decision -> .forge/questions.json `answer`) and rerun", "plain-build"))
         self.state["build_green"] = green
         self.state["stage"] = "accept"
         self.save()
+
+    def fix_round(self, n: int, rep: dict) -> None:
+        """Fix rounds continue the build session while the model stays the same; a different `model_fix` or the
+        escalation of the last round (to the main model) starts a fresh session with a short handoff instead."""
+        model = self.model_for("fix")
+        if n >= self.a.max_fix_rounds and n > 1 and model != self.a.model:
+            model = self.a.model
+            self.log(f"plain-fix{n}: escalation to {model}")
+        sid = self.state.get("sid_build") if self.state.get("sid_build_model") == model else None
+        disputes = self.forge / "disputes.md"
+        note = ("\n\nThe previous round changed nothing. Disputes on record (decide them against the spec; human "
+                "decisions below win):\n" + disputes.read_text(encoding="utf-8")[-3000:]) \
+            if self.state.get("max_rounds_extra") and disputes.is_file() else ""
+        brief = FIX_OUTPUT + failure_brief(rep) + note + self.human_decisions()
+        prompt = FIX + brief if sid else FIX + self.fix_handoff() + brief
+        out = self.staged(f"plain-fix{n}", model, prompt, lambda: True, resume=sid)
+        if out.get("session_id"):
+            self.state.update(sid_build=out["session_id"], sid_build_model=model)
+            self.save()
 
     def run_plain(self) -> int:
         if not self.adopt_profile():
@@ -1352,6 +1456,10 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="strong model, default opus (plain: also writes tests and code; "
                                                    "then the profile's `model` is the default)")
     ap.add_argument("--writer", default="sonnet", help="model that writes acceptance tests and code")
+    ap.add_argument("--model-build", default=None, help="plain: model of the build turn (default: profile `model_build`, "
+                                                         "else --model)")
+    ap.add_argument("--model-fix", default=None, help="plain: model of fix rounds (default: profile `model_fix`, else "
+                                                       "the build model); the last round escalates to --model")
     ap.add_argument("--max-fix-rounds", type=int, default=4, help="plain: resumes with failing gates before giving up")
     ap.add_argument("--accept", action="store_true", help="plain: also run the independent acceptance pass at the end")
     ap.add_argument("--max-hours", type=float, default=8)

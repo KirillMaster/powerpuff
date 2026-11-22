@@ -3,14 +3,20 @@
 Every unit runs through forge_run.py in its own git worktree and branch (cut from the current tip of the integration
 branch); a failed or blocked unit never stops the run. State: <repo>/.powerpuff/runs/<run_id>/state.json (resumable).
 
-Usage: python queue_run.py <queue.yaml> [--repo .] [--engine plain|forge] [--no-wait] [--only U1,U2] [--dry-run] [--attended]
+Usage: python queue_run.py <queue.yaml> [--repo .] [--engine plain|forge] [--parallel N] [--no-wait] [--only U1,U2]
+       [--dry-run] [--attended]
   --engine    forge_run engine of every unit; overrides queue.yaml `engine` (default plain)
+  --parallel  run up to N independent units at once (overrides queue.yaml `parallel`, default 1); fewer slots while the
+              account's 5-hour window is nearly used (rate-limit events of the sessions), none until a rejected window resets
   --no-wait   on a rate limit stop the run with exit 3 (state saved) instead of sleeping
   --max-outage-min  forge paused on an unreachable API (exit 3): wait 30 s, 60 s, ... <=15 min and rerun the unit;
               after N minutes in total (or with --no-wait at once) stop with exit 3, the unit stays `running`
   --dry-run   validate and print the execution order and the budget split, create nothing
   --attended  stop after every unit with exit 4 and `QUEUE: paused after <unit>`; re-run continues
 Exit: 0 done, 1 failed, 2 partial, 3 config error / rate limit with --no-wait, 4 attended pause. Last line `QUEUE: ...`.
+A failed unit gets `max_attempts` runs in total (default 2): the next one starts from a fresh branch and is told why the
+previous one failed (plus its .forge/disputes.md). A unit whose fix round changed nothing (`stuck`) or that has blocking
+questions stops as `needs-answer` without a retry. Units listed in `already_merged` are taken as merged into `base`.
 Final contour (once, after the last merge): profile tier `final` of powerpuff.yaml merged with queue.yaml
 `final.commands` (queue wins by name); commands may use {base} (run base_sha) and {root}. Format: docs/queue-format.md
 """
@@ -23,6 +29,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import forge_check  # noqa: E402
 import forge_run  # noqa: E402
+import spec_slice  # noqa: E402
 
 FORGE = Path(__file__).resolve().parent / "forge_run.py"
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
@@ -37,6 +45,8 @@ RISKS = ("low", "high")
 ENGINES = ("plain", "forge")
 GOOD = ("merged", "done")
 EXCLUDES = (".powerpuff/", ".forge/", ".forge-unit-spec.md")
+PARALLEL_ENV = {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0"}  # worktrees must not share build nodes
+RATE_FRESH_S = 900
 IDENT = ["-c", "user.name=powerpuff", "-c", "user.email=powerpuff@local"]
 sleep = time.sleep
 
@@ -110,6 +120,21 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
             errs.append(f"budget.{k} has an invalid value: {v!r}")
             v = d
         nums[k] = float(v)
+    unit_usd = budget.get("unit_usd")
+    if unit_usd is not None and (isinstance(unit_usd, bool) or not isinstance(unit_usd, (int, float)) or unit_usd <= 0):
+        errs.append(f"budget.unit_usd has an invalid value: {unit_usd!r}")
+        unit_usd = None
+    ints = {}
+    for k, d in (("max_attempts", 2), ("parallel", 1)):
+        v = q.get(k, d)
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            errs.append(f"{k} must be an integer >= 1")
+            v = d
+        ints[k] = v
+    already = str_list(q.get("already_merged"))
+    if already is None:
+        errs.append("already_merged must be a list of unit ids")
+        already = []
     auto = str_list(q.get("auto_merge"))
     if auto is None or any(a not in RISKS for a in auto):
         errs.append(f"auto_merge must be a list of {RISKS}")
@@ -172,6 +197,7 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
                       "requirements": lists["requirements"], "files": [posix(f) for f in lists["files"] or []],
                       "spec": text})
     ids = {u["id"] for u in units}
+    errs += [f"already_merged: unknown unit {x}" for x in already if x not in ids]
     deps = {u["id"]: u["deps"] for u in units}
     for u in units:
         for d in u["deps"]:
@@ -192,7 +218,10 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
                                 f"the other")
     cfg = {"run_id": run_id, "base": str(q.get("base") or "HEAD"), "integration_branch": ib,
            "model": str(q.get("model") or "opus"), "writer": str(q.get("writer") or "sonnet"),
-           "auto_merge": auto, "assume_defaults": assume, "engine": engine, "units": units, "final": final, "shared": shared_path, **nums}
+           "model_build": str(q["model_build"]) if q.get("model_build") else None,
+           "model_fix": str(q["model_fix"]) if q.get("model_fix") else None, "unit_usd": unit_usd,
+           "already_merged": already, "auto_merge": auto, "assume_defaults": assume, "engine": engine, "units": units,
+           "final": final, "shared": shared_path, **nums, **ints}
     return cfg, errs
 
 
@@ -234,7 +263,26 @@ def order(cfg: dict, only: set[str] | None) -> list[dict]:
 
 def caps(cfg: dict, n: int) -> tuple[float, float]:
     first_pass = cfg["max_usd"] * (1 - cfg["fix_reserve"])
+    if cfg.get("unit_usd"):
+        return first_pass, min(float(cfg["unit_usd"]), cfg["max_usd"])
     return first_pass, min(first_pass / max(n, 1) * 2, cfg["max_usd"])
+
+
+def rate_slots(path: Path, n: int, now: float | None = None) -> tuple[int, float]:
+    """(parallel slots, pause until epoch) from the latest rate-limit event the sessions saw."""
+    now = time.time() if now is None else now
+    try:
+        r = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return n, 0.0
+    if not isinstance(r, dict) or now - float(r.get("at") or 0) > RATE_FRESH_S:
+        return n, 0.0
+    if r.get("status") == "rejected" and float(r.get("resets_at") or 0) > now:
+        return 0, float(r["resets_at"]) + 60
+    util = float(r.get("utilization") or 0)
+    if util >= 0.9 or r.get("status") == "allowed_warning":
+        return 1, 0.0
+    return (max(1, n // 2), 0.0) if util >= 0.75 else (n, 0.0)
 
 
 class Queue:
@@ -249,16 +297,30 @@ class Queue:
         self.outage = forge_run.Outage(getattr(a, "max_outage_min", 120))
         self.st: dict = {}
         self.selected = [u["id"] for u in cfg["units"] if self.only is None or u["id"] in self.only]
+        self.lock = threading.RLock()
+        self.rate_file = self.run_dir / "rate.json"
+        self.pause_until = 0.0
 
     # ---- plumbing ---------------------------------------------------------------------------------
     def say(self, msg: str) -> None:
-        print(f"queue: {msg}", flush=True)
+        with self.lock:
+            print(f"{datetime.now():%H:%M:%S} queue: {msg}" if self.cfg.get("parallel", 1) > 1 else f"queue: {msg}",
+                  flush=True)
 
     def save(self) -> None:
-        self.st["elapsed_s"] = round(self.elapsed(), 1)
-        tmp = self.state_path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(self.st, indent=1, ensure_ascii=False), encoding="utf-8")
-        os.replace(tmp, self.state_path)
+        with self.lock:
+            self.st["elapsed_s"] = round(self.elapsed(), 1)
+            for i in range(20):  # unit threads update their own entries without the lock
+                try:
+                    text = json.dumps(self.st, indent=1, ensure_ascii=False)
+                    break
+                except RuntimeError:
+                    if i == 19:
+                        raise
+                    time.sleep(0.05)
+            tmp = self.state_path.with_suffix(".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.replace(tmp, self.state_path)
 
     def elapsed(self) -> float:
         return float(self.st.get("elapsed_s_base", 0)) + time.monotonic() - self.t0
@@ -270,11 +332,18 @@ class Queue:
         return self.st["units"][uid]
 
     def spent_others(self, uid: str | None) -> float:
-        return sum(float((v.get("cost") or {}).get("total_usd") or 0) for k, v in self.st["units"].items()
-                   if k != uid)
+        return sum(float((v.get("cost") or {}).get("total_usd") or 0) + float(v.get("spent_before") or 0)
+                   for k, v in self.st["units"].items() if k != uid)
+
+    def suffix(self, uid: str) -> str:
+        n = int(((self.st.get("units") or {}).get(uid) or {}).get("attempts") or 0)
+        return f"-a{n + 1}" if n else ""
 
     def branch(self, uid: str) -> str:
-        return f"powerpuff/{self.cfg['run_id']}/{uid}"
+        return f"powerpuff/{self.cfg['run_id']}/{uid}{self.suffix(uid)}"
+
+    def wt_path(self, uid: str) -> Path:
+        return self.wt_root / f"{uid}{self.suffix(uid)}"
 
     # ---- setup ------------------------------------------------------------------------------------
     def start(self) -> None:
@@ -297,6 +366,10 @@ class Queue:
             self.st["units"].setdefault(u["id"], {"status": "pending", "branch": self.branch(u["id"]),
                                                   "worktree": None, "forge_status": None, "cost": None,
                                                   "started": None, "finished": None, "seconds": 0, "reason": ""})
+        for uid in self.cfg.get("already_merged") or []:
+            if self.st["units"][uid]["status"] != "merged":
+                self.st["units"][uid].update(status="merged", reason="already merged into the base")
+        self.st.setdefault("verified_trees", [])
         self.st["integration_branch"] = self.cfg["integration_branch"]
         ib = self.cfg["integration_branch"]
         if git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{ib}").returncode != 0:
@@ -318,6 +391,10 @@ class Queue:
 
     def integration(self) -> Path:
         wt = self.wt_root / "_integration"
+        with self.lock:
+            return self._integration(wt)
+
+    def _integration(self, wt: Path) -> Path:
         if not (wt / ".git").exists():
             git(self.repo, "worktree", "prune")
             r = git(self.repo, "worktree", "add", "--force", str(wt), self.cfg["integration_branch"])
@@ -326,7 +403,11 @@ class Queue:
         return wt
 
     def prepare_worktree(self, uid: str) -> Path:
-        wt = self.wt_root / uid
+        with self.lock:
+            return self._prepare_worktree(uid)
+
+    def _prepare_worktree(self, uid: str) -> Path:
+        wt = self.wt_path(uid)
         if not (wt / ".git").exists():
             git(self.repo, "worktree", "prune")
             br = self.branch(uid)
@@ -344,14 +425,14 @@ class Queue:
                  f"Requirements: {', '.join(c['requirements']) or 'none listed'}",
                  f"Owned files: {', '.join(c['files']) or 'not restricted'}", "", "## Unit spec", "",
                  c["spec"].strip(), ""]
+        prev = self.u(uid).get("history") or []
+        if prev:
+            last = prev[-1]
+            parts += ["## Previous attempt (failed; do not repeat it)", "", f"- reason: {last.get('reason')}",
+                      *([f"- disputes:\n{last['disputes']}"] if last.get("disputes") else []), ""]
         shared = self.cfg["shared"]
         if shared:
-            if shared.is_dir():
-                text = "\n\n".join(f"# {n}\n\n{(shared / n).read_text(encoding='utf-8')}"
-                                   for n in forge_run.SPEC_FILES if (shared / n).is_file())
-            else:
-                text = shared.read_text(encoding="utf-8")
-            parts += ["## Shared spec (context only; build just the unit above)", "", text.strip(), ""]
+            parts.append(spec_slice.build(shared, c, self.repo))
         p = wt / ".forge-unit-spec.md"
         p.write_text("\n".join(parts), encoding="utf-8", newline="\n")
         return p
@@ -368,7 +449,8 @@ class Queue:
 
     def unit_cap(self, uid: str) -> float:
         _, nominal = caps(self.cfg, len(self.selected))
-        return min(self.cfg["max_usd"] - self.spent_others(uid), nominal)
+        own = float(self.u(uid).get("spent_before") or 0)
+        return max(0.01, min(self.cfg["max_usd"] - self.spent_others(uid) - own, nominal - own))
 
     # ---- scheduling -------------------------------------------------------------------------------
     def block_dependents(self) -> None:
@@ -423,14 +505,42 @@ class Queue:
 
     def forge_cmd(self, spec: Path, wt: Path, cap: float) -> list[str]:
         hours = max(self.remaining_s(), 60) / 3600
+        extra = [*(["--assume-defaults"] if self.cfg.get("assume_defaults") else []),
+                 *(["--model-build", self.cfg["model_build"]] if self.cfg.get("model_build") else []),
+                 *(["--model-fix", self.cfg["model_fix"]] if self.cfg.get("model_fix") else []),
+                 *(["--skip-base-check"] if self.base_verified(wt) else [])]
         return [sys.executable, str(FORGE), str(spec), "--repo", str(wt), "--model", self.cfg["model"],
                 "--writer", self.cfg["writer"], "--engine", self.cfg["engine"], "--max-usd", f"{cap:.4f}", "--max-hours", f"{hours:.4f}",
-                "--no-wait", "--stream", *(["--assume-defaults"] if self.cfg.get("assume_defaults") else [])]
+                "--no-wait", "--stream", *extra]
+
+    # ---- base check cache: a tree whose gates were green once is not checked again ------------------
+    def tree(self, wt: Path, rev: str) -> str:
+        return git(wt, "rev-parse", f"{rev}^{{tree}}").stdout.strip()
+
+    def base_verified(self, wt: Path) -> bool:
+        fs = self.read_forge_state(wt)
+        if fs.get("stage") not in (None, "init", "plain-tests", "audit") or "base_checked" in fs:
+            return False
+        rev = fs.get("start_sha") or "HEAD"
+        return bool(self.tree(wt, rev)) and self.tree(wt, rev) in (self.st.get("verified_trees") or [])
+
+    def note_verified(self, wt: Path) -> None:
+        fs = self.read_forge_state(wt)
+        trees = []
+        if fs.get("base_checked") is True and fs.get("start_sha"):
+            trees.append(self.tree(wt, fs["start_sha"]))
+        if fs.get("status") == "done":
+            trees.append(self.tree(wt, "HEAD"))
+        with self.lock:
+            known = self.st.setdefault("verified_trees", [])
+            known += [t for t in trees if t and t not in known]
+            del known[:-200]
 
     def run_forge(self, uid: str, wt: Path, spec: Path) -> tuple[int, str]:
         log = self.run_dir / f"{uid}.log"
         offset = log.stat().st_size if log.is_file() else 0
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8",
+               "POWERPUFF_RATE_FILE": str(self.rate_file), **(PARALLEL_ENV if self.cfg.get("parallel", 1) > 1 else {})}
         t = time.monotonic()
         with open(log, "ab") as f:
             rc = subprocess.run(self.forge_cmd(spec, wt, self.unit_cap(uid)), cwd=wt, env=env, stdout=f,
@@ -470,6 +580,7 @@ class Queue:
         while True:
             rc, out = self.run_forge(uid, wt, spec)
             self.sync_cost(uid, wt)
+            self.note_verified(wt)
             self.save()
             if rc in (0, 1):
                 self.outage.healthy()
@@ -477,14 +588,28 @@ class Queue:
                 v["finished"] = now_iso()
                 self.snapshot(uid, wt)
                 self.finish_ok(uid)
+                why = "merge conflict with the integration branch"
+                if v["status"] == "failed" and v["reason"] == "merge conflict" and self.retry(uid, wt, why):
+                    wt, spec = self.next_attempt(uid, why)
+                    crashes = 0
+                    continue
                 return "ok"
             if rc == 1:
                 why = self.fail_reason(wt, out, rc)
                 if "blocking questions" in why:
                     v.update(status="needs-answer", finished=now_iso(),
                              reason=f"{why}; answer in {posix(wt / '.forge' / 'questions.json')} and rerun")
+                elif why.startswith("stuck:"):
+                    disputes = wt / ".forge" / "disputes.md"
+                    v.update(status="needs-answer", finished=now_iso(),
+                             reason=f"{why}" + (f" | disputes: {' '.join(disputes.read_text(encoding='utf-8').split())[:400]}"
+                                                if disputes.is_file() else ""))
+                elif self.retry(uid, wt, why):
+                    wt, spec = self.next_attempt(uid, why)
+                    crashes = 0
+                    continue
                 else:
-                    v.update(status="failed", reason=why, finished=now_iso())
+                    v.update(status="failed", reason=self.final_reason(uid, why), finished=now_iso())
                 self.snapshot(uid, wt)
                 self.say(f"{uid} {v['status']}: {v['reason']}")
                 self.save()
@@ -506,6 +631,8 @@ class Queue:
                     self.save()
                     return "rate"
                 wait = min(forge_run.reset_wait_s(out), self.remaining_s())
+                with self.lock:
+                    self.pause_until = max(self.pause_until, time.time() + wait)
                 if wait <= 0:
                     v.update(status="skipped-budget", reason="wall-clock budget exhausted while waiting for a rate limit")
                     self.save()
@@ -515,12 +642,51 @@ class Queue:
                 continue
             crashes += 1
             if crashes > 1:
-                v.update(status="failed", reason=f"forge exited with code {rc} twice", finished=now_iso())
+                v.update(status="failed", reason=self.final_reason(uid, f"forge exited with code {rc} twice"),
+                         finished=now_iso())
                 self.snapshot(uid, wt)
                 self.say(f"{uid} failed: {v['reason']}")
                 self.save()
                 return "ok"
             self.say(f"{uid} forge exited with code {rc}, retrying once")
+
+    def next_attempt(self, uid: str, why: str) -> tuple[Path, Path]:
+        v = self.u(uid)
+        wt = self.prepare_worktree(uid)
+        spec = self.write_spec(uid, wt)
+        v.update(status="running", worktree=posix(wt), branch=self.branch(uid), reason="", finished=None)
+        self.save()
+        self.say(f"{uid} attempt {v['attempts'] + 1}/{self.cfg['max_attempts']} after: {why}")
+        return wt, spec
+
+    def final_reason(self, uid: str, why: str) -> str:
+        n = int(self.u(uid).get("attempts") or 0) + 1
+        return f"{why} (after {n} attempts; needs a human)" if n > 1 else why
+
+    def retry(self, uid: str, wt: Path, why: str) -> bool:
+        """Another attempt from a fresh branch when attempts are left: the failed one is archived with its reason."""
+        v = self.u(uid)
+        done = int(v.get("attempts") or 0) + 1
+        if done >= self.cfg["max_attempts"] or self.remaining_s() <= 0:
+            return False
+        _, nominal = caps(self.cfg, len(self.selected))
+        spent = float(v.get("spent_before") or 0) + float((v.get("cost") or {}).get("total_usd") or 0)
+        if spent >= nominal - 0.01:
+            return False
+        disputes = wt / ".forge" / "disputes.md"
+        hist = v.setdefault("history", [])
+        hist.append({"reason": why, "cost": (v.get("cost") or {}).get("total_usd"),
+                     "disputes": disputes.read_text(encoding="utf-8")[:3000] if disputes.is_file() else ""})
+        v["attempts"] = done
+        v["spent_before"] = round(float(v.get("spent_before") or 0) + float((v.get("cost") or {}).get("total_usd") or 0), 4)
+        v["cost"] = None
+        self.snapshot(uid, wt, f"{uid}.attempt{done}")
+        self.save()  # the next attempt gets a new branch and worktree name (suffix -a<n>); the old ones go best-effort
+        with self.lock:
+            git(self.repo, "worktree", "remove", "--force", str(wt))
+            shutil.rmtree(wt, ignore_errors=True)
+            git(self.repo, "worktree", "prune")
+        return True
 
     def finish_ok(self, uid: str) -> None:
         v = self.u(uid)
@@ -540,27 +706,29 @@ class Queue:
         self.save()
 
     def merge(self, uid: str) -> bool:
-        wt = self.integration()
-        r = git(wt, *IDENT, "merge", "--no-ff", "--no-gpg-sign", "-m",
-                f"powerpuff: merge {uid} ({self.by_id[uid]['title']})", self.branch(uid))
-        if r.returncode != 0:
-            git(wt, "merge", "--abort")
-            return False
-        return True
+        with self.lock:
+            wt = self.integration()
+            r = git(wt, *IDENT, "merge", "--no-ff", "--no-gpg-sign", "-m",
+                    f"powerpuff: merge {uid} ({self.by_id[uid]['title']})", self.branch(uid))
+            if r.returncode != 0:
+                git(wt, "merge", "--abort")
+                return False
+            return True
 
-    def snapshot(self, uid: str, wt: Path) -> None:
+    def snapshot(self, uid: str, wt: Path, name: str | None = None) -> None:
         src = wt / ".forge"
         if src.is_dir():
-            dst = self.run_dir / "forge" / uid
+            dst = self.run_dir / "forge" / (name or uid)
             shutil.rmtree(dst, ignore_errors=True)
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
 
     def cleanup(self, uid: str) -> None:
-        wt = self.wt_root / uid
+        wt = self.wt_path(uid)
         self.snapshot(uid, wt)
-        git(self.repo, "worktree", "remove", "--force", str(wt))
-        shutil.rmtree(wt, ignore_errors=True)
-        git(self.repo, "worktree", "prune")
+        with self.lock:
+            git(self.repo, "worktree", "remove", "--force", str(wt))
+            shutil.rmtree(wt, ignore_errors=True)
+            git(self.repo, "worktree", "prune")
 
     # ---- final contour ----------------------------------------------------------------------------
     def final_commands(self) -> tuple[dict[str, str], str, str]:
@@ -709,11 +877,66 @@ class Queue:
                 print(f"QUEUE: paused after {uid}", flush=True)
                 return 4
 
+    def ready(self, busy: set[str]) -> list[str]:
+        """Units to start now: interrupted `running` ones first, then pending units whose deps are merged."""
+        run = [u for u in self.selected if u not in busy and self.u(u)["status"] == "running"]
+        new = [u for u in self.selected if u not in busy and self.u(u)["status"] == "pending"
+               and all(self.u(d)["status"] == "merged" for d in self.by_id[u]["deps"])]
+        return run + new
+
+    def loop_parallel(self, n: int, tick: float = 10.0, stagger: float = 5.0) -> int | None:
+        threads: dict[str, threading.Thread] = {}
+        results: dict[str, str] = {}
+        stop: str | None = None
+
+        def work(uid: str) -> None:
+            try:
+                results[uid] = self.run_unit(uid)
+            except Exception as e:  # noqa: BLE001 - one broken unit never takes the others down
+                with self.lock:
+                    merged = self.is_merged(uid)
+                    self.u(uid).update(status="merged" if merged else "failed", finished=now_iso(),
+                                       reason=f"queue error after the merge: {e}" if merged else f"queue error: {e}")
+                    self.save()
+                results[uid] = "ok"
+        while True:
+            for uid, t in list(threads.items()):
+                if not t.is_alive():
+                    t.join()
+                    del threads[uid]
+                    out = results.pop(uid, "ok")
+                    stop = stop or (out if out in ("rate", "budget") else None)
+            with self.lock:
+                self.block_dependents()
+            slots, until = rate_slots(self.rate_file, n)
+            pause = max(until, self.pause_until) > time.time()
+            if stop is None and not pause:
+                for uid in self.ready(set(threads))[:max(0, slots - len(threads))]:
+                    why = self.budget_problem(uid)
+                    if why:
+                        stop = "budget"
+                        self.say(f"not starting {uid}: {why}")
+                        break
+                    self.integration()
+                    threads[uid] = threading.Thread(target=work, args=(uid,), daemon=True, name=f"unit-{uid}")
+                    threads[uid].start()
+                    sleep(stagger)
+            if not threads:
+                if stop == "rate":
+                    return 3
+                if stop == "budget":
+                    self.skip_rest("budget exhausted")
+                    return None
+                if not pause and not self.ready(set()):
+                    return None
+            sleep(tick)
+
     def run(self) -> int:
         self.start()
         code: int | None = None
         try:
-            code = self.loop()
+            n = self.cfg.get("parallel", 1)
+            code = self.loop_parallel(n) if n > 1 and not self.a.attended else self.loop()
             if code is None:
                 self.run_final()
                 wt = self.wt_root / "_integration"
@@ -737,6 +960,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-wait", action="store_true")
     ap.add_argument("--max-outage-min", type=float, default=120, help="total wait for an unreachable API before stopping")
     ap.add_argument("--engine", choices=("plain", "forge"), help="overrides `engine` of the queue file (default plain)")
+    ap.add_argument("--parallel", type=int, default=0, help="independent units at once (overrides queue.yaml `parallel`)")
     ap.add_argument("--only", default="")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--attended", action="store_true")
@@ -761,6 +985,8 @@ def main(argv: list[str] | None = None) -> int:
         return config_error([f"cannot read {qfile}: {e}"])
     if a.engine:
         cfg["engine"] = a.engine
+    if a.parallel:
+        cfg["parallel"] = max(1, a.parallel)
     if a.only:
         errs += [f"--only: unknown unit {x}" for x in a.only.split(",") if x not in {u["id"] for u in cfg["units"]}]
     run_dir = repo / ".powerpuff" / "runs" / cfg["run_id"]
@@ -772,6 +998,8 @@ def main(argv: list[str] | None = None) -> int:
         plan = order(cfg, q.only)
         first_pass, cap = caps(cfg, len(q.selected))
         print(f"queue: dry-run run_id={cfg['run_id']} base={cfg['base']} integration={cfg['integration_branch']}")
+        print(f"queue: parallel={cfg['parallel']} max_attempts={cfg['max_attempts']} model={cfg['model']} "
+              f"model_build={cfg['model_build'] or cfg['model']} model_fix={cfg['model_fix'] or cfg['model_build'] or cfg['model']}")
         print(f"queue: budget max_usd={cfg['max_usd']} max_hours={cfg['max_hours']} fix_reserve={cfg['fix_reserve']} "
               f"first_pass=${first_pass:.2f} reserve=${cfg['max_usd'] - first_pass:.2f} unit_cap=${cap:.2f}")
         for n, u in enumerate(plan, 1):

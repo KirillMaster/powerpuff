@@ -6,7 +6,9 @@ Scenario: {"stages": {"<stage>": [entry, ...]}}; call N of a stage uses entry N 
 or entry "default" = the stage's happy-path behaviour. Entry keys:
   base (bool)  start from the stage default writes/appends, `write`/`append` overlay them
   write {path: text}, append {path: text}, delete [path]
-  result       ok (default) | rate_limit | is_error | no_result | api_error      epoch (rate_limit), text, cost, exit_code
+  result       ok (default) | rate_limit | rate_event (rate_limit_event rejected + synthetic message, like the real CLI)
+               | rate_warning (ok, with an allowed_warning rate_limit_event) | is_error | no_result | api_error
+               epoch (rate_limit / rate_event), text, cost, exit_code
   kill_driver  terminate the driver process, then exit without a result event
 Stages are recognised by the first line of the prompt: audit tests topup vacuous implement fix accept gapfix retry
 and, for the plain engine, ptests (turn 1) pbuild (turn 2) panswers. Every session reports session_id `sess-<n>`; the
@@ -129,6 +131,22 @@ def main() -> int:
                           "terminal_reason": "api_error", "result": err, "total_cost_usd": 0, "num_turns": 1,
                           "session_id": sid}), flush=True)
         return int(entry.get("exit_code", 1))
+    if kind in ("rate_event", "rate_warning"):
+        epoch = entry.get("epoch", int(time.time()) + 3600)
+        status = "rejected" if kind == "rate_event" else "allowed_warning"
+        print(json.dumps({"type": "rate_limit_event", "rate_limit_info": {
+            "status": status, "resetsAt": epoch, "rateLimitType": "five_hour", "overageStatus": "rejected",
+            "unifiedWindows": {"five_hour": {"utilization": 1 if status == "rejected" else 0.8, "resetsAt": epoch,
+                                             "status": status}}}}), flush=True)
+    if kind == "rate_event":
+        msg = "You've hit your 5-hour limit · resets 5:10am (Asia/Bangkok)"
+        print(json.dumps({"type": "assistant", "error": "rate_limit", "is_api_error_message": True,
+                          "message": {"model": "<synthetic>", "content": [{"type": "text", "text": msg}]}}), flush=True)
+        print(json.dumps({"type": "result", "subtype": "success", "is_error": True, "result": msg,
+                          "total_cost_usd": 0, "num_turns": 1, "session_id": sid}), flush=True)
+        return int(entry.get("exit_code", 1))
+    if kind == "rate_warning":
+        kind = "ok"
     is_error = kind in ("rate_limit", "is_error")
     text = entry.get("text", "done")
     if kind == "rate_limit":
