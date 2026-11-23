@@ -1,15 +1,15 @@
-# Attended mode: хуки Claude Code
+# Attended mode: Claude Code hooks
 
-Два хука плагина для сессий с человеком. Оба opt-in: без `powerpuff.yaml` или без секции `hooks:` это тихий no-op (exit 0).
+Two plugin hooks for sessions with a human. Both are opt-in: without `powerpuff.yaml` or without a `hooks:` section they are a silent no-op (exit 0).
 
-| Хук | Событие | Что делает |
+| Hook | Event | What it does |
 |---|---|---|
-| `scripts/hook_stop.py` | Stop | Не даёт завершить ход при красных gates tier `iteration` |
-| `scripts/hook_protect.py` | PreToolUse (`Edit\|Write\|MultiEdit\|NotebookEdit`) | Блокирует правку protected-файлов |
+| `scripts/hook_stop.py` | Stop | Prevents ending the turn while `iteration`-tier gates are red |
+| `scripts/hook_protect.py` | PreToolUse (`Edit\|Write\|MultiEdit\|NotebookEdit`) | Blocks edits to protected files |
 
-Регистрация: `hooks/hooks.json`. Корень проекта = ближайший предок `cwd` с `powerpuff.yaml` (поиск останавливается на корне git).
+Registration: `hooks/hooks.json`. Project root = the nearest ancestor of `cwd` containing `powerpuff.yaml` (the search stops at the git root).
 
-## Включение
+## Enabling
 
 ```yaml
 hooks:
@@ -19,54 +19,54 @@ hooks:
   stop_timeout_s: 300
 ```
 
-| Ключ | По умолчанию | Смысл |
+| Key | Default | Meaning |
 |---|---|---|
-| `stop_gates` | false | Включает Stop-хук |
-| `protect` | false | Включает protect-хук |
-| `stop_max_blocks` | 3 | Подряд блокировок на сессию до отпускания |
-| `stop_timeout_s` | 300 | Таймаут каждого gate и `format_fix` |
+| `stop_gates` | false | Enables the Stop hook |
+| `protect` | false | Enables the protect hook |
+| `stop_max_blocks` | 3 | Consecutive blocks per session before release |
+| `stop_timeout_s` | 300 | Timeout for each gate and `format_fix` |
 
 ## Stop
 
-| Ситуация | Результат |
+| Situation | Result |
 |---|---|
-| Дерево чистое (нет изменений к HEAD, нет untracked) | exit 0, gates не запускаются |
-| Дерево совпадает с последним зелёным (HEAD + status + mtime) | exit 0, кэш |
-| Gates зелёные | exit 0, счётчик сброшен |
-| Красный gate или отсутствует инструмент | exit 2: имена упавших gates + хвост вывода (до 40 строк, всего до 6000 символов), в конце «Fix the cause; do not disable or skip the check.» |
-| `POWERPUFF_DRIVER=1` | exit 0 (решает драйвер) |
+| Tree is clean (no changes vs HEAD, no untracked files) | exit 0, gates are not run |
+| Tree matches the last green one (HEAD + status + mtime) | exit 0, cache |
+| Gates green | exit 0, counter reset |
+| Red gate or missing tool | exit 2: names of failed gates + output tail (up to 40 lines, up to 6000 characters total), ending with "Fix the cause; do not disable or skip the check." |
+| `POWERPUFF_DRIVER=1` | exit 0 (the driver decides) |
 
-Порядок: `format_fix` (если задан), затем gates `iteration` через `forge_check.check_gates`. Отсутствующий инструмент = красный gate.
+Order: `format_fix` (if set), then the `iteration` gates via `forge_check.check_gates`. A missing tool = a red gate.
 
-Loop guard: счётчик подряд идущих блокировок по `session_id` в `.powerpuff/hook-state.json`. После `stop_max_blocks` хук отпускает ход (exit 0) и пишет в stderr `gates still red after N attempts — stopping for the human`; счётчик сбрасывается при зелёном и после отпускания.
+Loop guard: a counter of consecutive blocks per `session_id` in `.powerpuff/hook-state.json`. After `stop_max_blocks` the hook releases the turn (exit 0) and writes `gates still red after N attempts — stopping for the human` to stderr; the counter resets on green and after release.
 
 ## Protect
 
-| Цель правки | Результат |
+| Edit target | Result |
 |---|---|
-| Совпадает с glob из `protected` (то же сопоставление, что в `gate_guard`) | exit 2: файл, glob, «ask the human to change it; do not work around it» |
-| Сам `powerpuff.yaml` | exit 2 |
-| Остальное, пути вне корня проекта | exit 0 |
+| Matches a glob from `protected` (same matching as in `gate_guard`) | exit 2: file, glob, "ask the human to change it; do not work around it" |
+| `powerpuff.yaml` itself | exit 2 |
+| Anything else, paths outside the project root | exit 0 |
 
-Путь нормализуется относительно корня, слеши прямые; на Windows регистр не важен. Действует и внутри сессий драйвера.
+The path is normalized relative to the root, with forward slashes; on Windows case is ignored. It also applies inside driver sessions.
 
-## Связь с автономным драйвером
+## Relation to the autonomous driver
 
-| Аспект | Драйвер (`forge_run`, `prepare_run`) | Attended |
+| Aspect | Driver (`forge_run`, `prepare_run`) | Attended |
 |---|---|---|
-| Кто решает про gates | Скрипт | Stop-хук |
-| Stop-хук | Отключён (`POWERPUFF_DRIVER=1` в окружении `claude`) | Активен |
-| Protect-хук | Активен | Активен |
-| Очередь `--attended` | Пауза после каждой единицы (см. `docs/queue-format.md`) | Не связано с хуками |
+| Who decides on gates | Script | Stop hook |
+| Stop hook | Disabled (`POWERPUFF_DRIVER=1` in the `claude` environment) | Active |
+| Protect hook | Active | Active |
+| Queue `--attended` | Pause after each unit (see `docs/queue-format.md`) | Unrelated to the hooks |
 
-## Осознанный обход
+## Deliberate bypass
 
-| Способ | Действие |
+| Method | Action |
 |---|---|
-| Разовая правка protected-файла | Человек запускает сессию с `POWERPUFF_ALLOW_PROTECTED=1` |
-| Выключить хук | `stop_gates: false` / `protect: false` в `powerpuff.yaml` (правит человек) |
-| Сбросить кэш и счётчики | Удалить `.powerpuff/hook-state.json` |
+| One-off edit of a protected file | The human starts the session with `POWERPUFF_ALLOW_PROTECTED=1` |
+| Turn a hook off | `stop_gates: false` / `protect: false` in `powerpuff.yaml` (edited by the human) |
+| Reset cache and counters | Delete `.powerpuff/hook-state.json` |
 
-Модель не должна обходить хуки: ни переименованием файла, ни записью через shell, ни отключением проверки.
+The model must not bypass the hooks: not by renaming a file, not by writing through the shell, not by disabling a check.
 
-Внутренняя ошибка хука: exit 0 и строка `powerpuff hook error: ...` в stderr; сессия не падает.
+Internal hook error: exit 0 and a `powerpuff hook error: ...` line on stderr; the session does not crash.

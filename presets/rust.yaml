@@ -1,6 +1,6 @@
-# Пресет Rust. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
-# Не проверен на реальном репозитории (составлен по документации инструментов).
-# Инструменты: cargo, rustfmt, clippy (rustup); cargo-llvm-cov; cargo-deny; cargo-mutants; lizard.
+# Rust preset. Reads scripts/profile_init.py; format and `needs` conditions are in docs/profile.md.
+# Not verified on a real repository (written from the tools' documentation).
+# Tools: cargo, rustfmt, clippy (rustup); cargo-llvm-cov; cargo-deny; cargo-mutants; lizard.
 stack: rust
 detect: ["Cargo.toml"]
 gates:

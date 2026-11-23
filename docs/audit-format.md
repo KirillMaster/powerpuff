@@ -1,38 +1,38 @@
-# audit — карточки, `answers.yaml` и `audit_apply.py`
+# audit — cards, `answers.yaml` and `audit_apply.py`
 
-Аудит после автономного прогона: человек разбирает `cards.html` (10–20 минут), экспортирует `answers.yaml`, скрипт превращает ответы в действия и очередь следующего прогона. Моделей не вызывает.
+The audit after an autonomous run: a human goes through `cards.html` (10–20 minutes), exports `answers.yaml`, and the script turns the answers into actions and the queue for the next run. No models are called.
 
 ```
 python scripts/audit_cards.py <run dir | summary.json> [--repo .] [--out <run dir>/cards.html] [--max-diff-lines 400]
 python scripts/audit_apply.py answers.yaml --run <run dir> [--repo .] [--queue queue.yaml] [--out next-queue.yaml] [--dry-run]
 ```
 
-## Карточки (`cards.html`)
-Один файл: CSS и JS внутри, внешних запросов нет, открывается с `file://`, светлая и тёмная тема по `prefers-color-scheme`. Данные лежат одним JSON-блоком, текст из файлов выводится через `textContent`.
+## Cards (`cards.html`)
+A single file: CSS and JS inline, no external requests, opens from `file://`, light and dark theme via `prefers-color-scheme`. The data lives in one JSON block, text from files is rendered via `textContent`.
 
-| Вид | Что попадает | Id | Варианты |
+| Kind | What goes in | Id | Options |
 |---|---|---|---|
-| `question` | открытый вопрос любой единицы; сначала `blocking`, затем `non-blocking`; `info` — в свёрнутом блоке карточки `summary` | `question:<unit>:<Qn>` | `accept-default`, `answer` |
-| `high-risk` | единица `done`, ждёт аудита: решения `D`, дифф-стат, свёрнутый патч, гейты, guard | `unit:<unit>` | `merge`, `reject`, `rework` |
-| `failure` | единица `failed`: причина, начало `REPORT.md`, вывод упавших проверок, конец лога | `unit:<unit>` | `retry`, `rework`, `drop` |
+| `question` | an open question of any unit; `blocking` first, then `non-blocking`; `info` goes in a collapsed block of the `summary` card | `question:<unit>:<Qn>` | `accept-default`, `answer` |
+| `high-risk` | a `done` unit awaiting audit: decisions `D`, diff stat, collapsed patch, gates, guard | `unit:<unit>` | `merge`, `reject`, `rework` |
+| `failure` | a `failed` unit: reason, start of `REPORT.md`, output of failed checks, end of the log | `unit:<unit>` | `retry`, `rework`, `drop` |
 | `blocked` | `blocked`, `skipped-budget`, `needs-answer` | `unit:<unit>` | `requeue`, `drop` |
-| `final` | упавшая команда финального контура с хвостом вывода | `final:<имя команды>` | `fix`, `ignore` |
-| `summary` | единицы по статусам, стоимость по моделям, время, ветка | `summary` | нет решения |
+| `final` | a failed final-contour command with the output tail | `final:<command name>` | `fix`, `ignore` |
+| `summary` | units by status, cost by model, time, branch | `summary` | no decision |
 
-Дифф берётся как `git diff <integration_branch>...<branch>`; нет репозитория, ветки или снимка `.forge` — раздел пропускается с пометкой, генерация не падает.
+The diff is taken as `git diff <integration_branch>...<branch>`; if there is no repository, branch or `.forge` snapshot, the section is skipped with a note and generation does not fail.
 
-Клавиши: `j`/`k` — следующая/предыдущая карточка, `1`–`9` — вариант, `e` — экспорт. Прогресс «decided n / m»; решения хранятся в `localStorage` по `run_id`. «Export» скачивает `answers.yaml` и показывает его в поле для копирования.
+Keys: `j`/`k` — next/previous card, `1`–`9` — option, `e` — export. Progress "decided n / m"; decisions are kept in `localStorage` by `run_id`. "Export" downloads `answers.yaml` and shows it in a copy field.
 
 ## `answers.yaml`
-| Поле | Смысл |
+| Field | Meaning |
 |---|---|
-| `run_id` | должен совпасть с `run_id` прогона |
-| `decided_at` | время экспорта, ISO 8601 |
-| `answers[].card` | id карточки из таблицы выше |
+| `run_id` | must match the run's `run_id` |
+| `decided_at` | export time, ISO 8601 |
+| `answers[].card` | card id from the table above |
 | `answers[].decision` | `accept-default`, `answer`, `merge`, `reject`, `rework`, `retry`, `drop`, `requeue`, `fix`, `ignore` |
-| `answers[].text` | комментарий или ответ; обязателен для `answer` и `rework` |
+| `answers[].text` | comment or answer; required for `answer` and `rework` |
 
-Нерешённые карточки в файл не попадают. Допустимость решения зависит от вида карточки (таблица выше); `accept-default` требует непустого значения по умолчанию.
+Undecided cards do not appear in the file. Whether a decision is allowed depends on the card kind (table above); `accept-default` requires a non-empty default value.
 
 ```yaml
 run_id: "2026-11-17-a"
@@ -52,34 +52,34 @@ answers:
     text: "only src/a.py"
 ```
 
-Скаляры в двойных кавычках (JSON-экранирование). Без PyYAML `audit_apply.py` читает этот формат и JSON.
+Scalars are in double quotes (JSON escaping). Without PyYAML `audit_apply.py` reads this format and JSON.
 
-## Что делает `audit_apply.py`
-| Решение | Действие |
+## What `audit_apply.py` does
+| Decision | Action |
 |---|---|
-| `accept-default` / `answer` | поле `answer` в `.forge/questions.json` рабочей копии единицы (если она ещё есть) и в её снимке `<run dir>/forge/<unit>/`; запись в `decisions.md` |
-| `merge` | единица сливается в интеграционную ветку во временном worktree (`worktree add --detach`, `merge --no-ff`, `update-ref` с проверкой старого значения); рабочая копия пользователя не затрагивается; ветка занята в другом worktree или конфликт — действие `FAILED`, код выхода 2; уже слито — пропуск |
-| `rework`, `retry`, `requeue` | единица попадает в следующую очередь |
-| `fix` | новая единица `FIX-<имя>`: упавшая команда, хвост вывода, комментарий |
-| `reject`, `drop`, `ignore` | только запись в `audit-actions.md` |
+| `accept-default` / `answer` | the `answer` field in the unit working copy's `.forge/questions.json` (if it still exists) and in its snapshot `<run dir>/forge/<unit>/`; an entry in `decisions.md` |
+| `merge` | the unit is merged into the integration branch in a temporary worktree (`worktree add --detach`, `merge --no-ff`, `update-ref` with an old-value check); the user's working copy is untouched; branch checked out in another worktree or a conflict — action `FAILED`, exit code 2; already merged — skipped |
+| `rework`, `retry`, `requeue` | the unit goes into the next queue |
+| `fix` | a new unit `FIX-<name>`: the failed command, output tail, comment |
+| `reject`, `drop`, `ignore` | only an entry in `audit-actions.md` |
 
-Следующая очередь (`--out`, по умолчанию `<run dir>/next-queue.yaml`):
-| Поле | Значение |
+Next queue (`--out`, default `<run dir>/next-queue.yaml`):
+| Field | Value |
 |---|---|
 | `run_id` | `<run_id>-r2`, `-r3`, … |
-| `base` | интеграционная ветка прогона |
-| `spec`, `budget`, `model`, `writer`, `auto_merge`, `assume_defaults`, `final` | копия из исходной очереди (`--queue`, иначе `queue_file` из `state.json`) |
-| `units` | единицы исходной очереди в прежнем порядке, затем `FIX-*`; `spec_file` встраивается в `spec` |
-| `units[].deps` | только присутствующие в новой очереди; зависимость от отсутствующей единицы заменяется её собственными зависимостями (слитые и отброшенные не требуются) |
-| `units[].spec` | исходный текст + `Human answers:` (ответы на вопросы этой единицы) + `Human feedback:` (комментарий) |
+| `base` | the run's integration branch |
+| `spec`, `budget`, `model`, `writer`, `auto_merge`, `assume_defaults`, `final` | copied from the original queue (`--queue`, otherwise `queue_file` from `state.json`) |
+| `units` | the original queue's units in the original order, then `FIX-*`; `spec_file` is embedded into `spec` |
+| `units[].deps` | only those present in the new queue; a dependency on an absent unit is replaced by that unit's own dependencies (merged and dropped ones are not required) |
+| `units[].spec` | original text + `Human answers:` (answers to this unit's questions) + `Human feedback:` (comment) |
 
-Файлы в `<run dir>`: `decisions.md` (ответы на вопросы), `audit-actions.md` (git-команды слияний и остальные решения), оба дополняются при каждом применении.
+Files in `<run dir>`: `decisions.md` (answers to questions), `audit-actions.md` (git commands of merges and the other decisions), both appended to on each application.
 
-## Коды выхода
-| Код | Условие |
+## Exit codes
+| Code | Condition |
 |---|---|
-| 0 | всё выполнено |
-| 2 | действие не удалось (конфликт слияния, запись ответа) |
-| 3 | неверный ввод: чужой `run_id`, неизвестная карточка, недопустимое решение, нет текста, нет исходной очереди; перечислены все проблемы, ничего не изменено |
+| 0 | everything done |
+| 2 | an action failed (merge conflict, answer write) |
+| 3 | invalid input: foreign `run_id`, unknown card, disallowed decision, missing text, no original queue; all problems are listed, nothing is changed |
 
-`--dry-run` проверяет ввод и печатает план: файлы не пишутся, ветки не двигаются. Повторное применение тех же ответов на вопросы даёт код 3: закрытые вопросы карточками больше не считаются.
+`--dry-run` validates the input and prints the plan: no files are written, no branches move. Re-applying the same answers to questions gives code 3: closed questions are no longer counted as cards.

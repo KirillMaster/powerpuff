@@ -1,12 +1,12 @@
-# queue.yaml — очередь единиц и `queue_run.py`
+# queue.yaml — the unit queue and `queue_run.py`
 
-`queue_run.py` — внешний скрипт-оркестратор автономного прогона: сам моделей не вызывает, каждую единицу отдаёт `forge_run.py`. Провал или блокировка одной единицы прогон не останавливают.
+`queue_run.py` is the external script orchestrator of an autonomous run: it calls no models itself and hands each unit to `forge_run.py`. The failure or blocking of one unit does not stop the run.
 
 ```
 python scripts/queue_run.py queue.yaml [--repo .] [--engine plain|forge] [--no-wait] [--only U1,U2] [--dry-run] [--attended]
 ```
 
-## Пример
+## Example
 ```yaml
 run_id: 2026-11-17-a
 base: main
@@ -15,7 +15,7 @@ spec: specs/001-feature
 budget: {max_usd: 60, max_hours: 8, fix_reserve: 0.33}
 model: opus
 writer: sonnet
-engine: plain          # plain (по умолчанию) | forge; CLI --engine перекрывает
+engine: plain          # plain (default) | forge; CLI --engine overrides
 auto_merge: [low]
 final:
   timeout: 1800
@@ -24,96 +24,96 @@ final:
     smoke: "python scripts/smoke.py"
 units:
   - id: U1
-    title: "Парсер заголовков"
+    title: "Header parser"
     deps: []
     risk: low
     requirements: [FR-1, AS-2]
     files: [src/parser.py]
     spec: |
-      Что построить: ...
+      What to build: ...
   - id: U2
-    title: "Эндпоинт /items"
+    title: "/items endpoint"
     deps: [U1]
     risk: high
     files: [src/parser.py, src/api.py]
     spec_file: units/u2.md
 ```
 
-## Поля
-| Поле | По умолчанию | Смысл |
+## Fields
+| Field | Default | Meaning |
 |---|---|---|
-| `run_id` | дата изменения файла + 6 символов sha1 | имя прогона; для продолжения через сутки или после правки файла задавайте явно |
-| `base` | `HEAD` | ветка или коммит, от которых стартует прогон |
-| `integration_branch` | `powerpuff/run-<run_id>` | ветка, куда сливаются единицы; не может совпадать с `powerpuff/<run_id>` |
-| `spec` | нет | общая спека (каталог или файл). В спеку единицы попадает только её срез (`scripts/spec_slice.py`): элементы yamlkit с id из `requirements` и из текста единицы (FR/AS/AC/T/C/E/US), задачи `tasks.yaml` с этими `requirement_refs`, их контракты и сущности; для markdown — абзацы с этими id. Спека ≤ 12K символов вставляется целиком. Остальное — список путей для Read |
-| `budget.max_usd` / `max_hours` | 60 / 8 | лимиты на весь прогон |
-| `budget.fix_reserve` | 0.33 | доля бюджета вне первого прохода (0 ≤ x < 1) |
-| `budget.unit_usd` | нет | явный лимит на единицу вместо формулы ниже |
-| `model` / `writer` | `opus` / `sonnet` | сильная модель и писатель для `forge_run.py` |
-| `model_build` / `model_fix` | `model` / `model_build` | движок plain: модель хода реализации и раундов исправления (`--model-build` / `--model-fix`); последний раунд исправления эскалируется на `model`. Без ключа — `model_build`/`model_fix` из `powerpuff.yaml` |
-| `parallel` | 1 | сколько независимых единиц идёт одновременно (`--parallel N` переопределяет) |
-| `max_attempts` | 2 | запусков на единицу всего; следующий — с новой ветки, с причиной прошлого провала и его `disputes.md` в спеке |
-| `already_merged` | `[]` | id единиц, уже слитых в `base` (продолжение прошлого прогона): сразу `merged` |
-| `auto_merge` | `[]` | уровни риска, которые сливаются без человека |
-| `assume_defaults` | `false` | `true` → `--assume-defaults` в `forge_run.py`: неотвеченные `blocking` вопросы решаются дефолтами аудитора; не bool = ошибка конфигурации |
-| `final.commands` | нет | `{имя: команда}`, тяжёлый контур в интеграционном worktree после очереди; если в репозитории есть `powerpuff.yaml`, контур = гейты его уровня `final` + эти команды (одноимённые из очереди переопределяют). Подстановки `{base}` (`base_sha` прогона) и `{root}`. Источник — `final_gates_source` в `summary.json`, неутверждённый профиль помечен. Нет инструмента = провал |
-| `final.timeout` | 1800 | секунд на команду |
-| `units[].id` | обязателен | уникальный, `[A-Za-z0-9_.-]+` |
-| `units[].title` | `id` | заголовок |
-| `units[].deps` | `[]` | id единиц, которые должны быть слиты в интеграционную ветку |
-| `units[].risk` | `high` | `low` или `high` |
-| `units[].requirements` | `[]` | id требований; информативно и попадают в спеку единицы |
-| `units[].files` | `[]` | файлы единицы; общий файл без зависимости между единицами = ошибка конфигурации |
-| `units[].spec` / `spec_file` | обязателен один из двух | текст единицы; `spec_file` — путь рядом с `queue.yaml` |
+| `run_id` | file modification date + 6 characters of sha1 | run name; to resume after a day or after editing the file, set it explicitly |
+| `base` | `HEAD` | branch or commit the run starts from |
+| `integration_branch` | `powerpuff/run-<run_id>` | the branch units are merged into; cannot equal `powerpuff/<run_id>` |
+| `spec` | none | shared spec (directory or file). Only its slice goes into a unit's spec (`scripts/spec_slice.py`): yamlkit elements with ids from `requirements` and from the unit's text (FR/AS/AC/T/C/E/US), `tasks.yaml` tasks with those `requirement_refs`, their contracts and entities; for markdown — paragraphs with those ids. A spec ≤ 12K characters is inserted whole. The rest is a list of paths for Read |
+| `budget.max_usd` / `max_hours` | 60 / 8 | limits for the whole run |
+| `budget.fix_reserve` | 0.33 | share of the budget outside the first pass (0 ≤ x < 1) |
+| `budget.unit_usd` | none | explicit per-unit limit instead of the formula below |
+| `model` / `writer` | `opus` / `sonnet` | strong model and writer for `forge_run.py` |
+| `model_build` / `model_fix` | `model` / `model_build` | plain engine: model for the implementation turn and for fix rounds (`--model-build` / `--model-fix`); the last fix round is escalated to `model`. Without the key — `model_build`/`model_fix` from `powerpuff.yaml` |
+| `parallel` | 1 | how many independent units run at once (`--parallel N` overrides) |
+| `max_attempts` | 2 | total runs per unit; the next one starts from a fresh branch, with the reason for the previous failure and its `disputes.md` in the spec |
+| `already_merged` | `[]` | ids of units already merged into `base` (continuing a previous run): immediately `merged` |
+| `auto_merge` | `[]` | risk levels that merge without a human |
+| `assume_defaults` | `false` | `true` → `--assume-defaults` to `forge_run.py`: unanswered `blocking` questions are resolved with the auditor's defaults; non-bool = configuration error |
+| `final.commands` | none | `{name: command}`, the heavy contour in the integration worktree after the queue; if the repository has `powerpuff.yaml`, the contour = the gates of its `final` tier + these commands (same-named ones from the queue override). Substitutions `{base}` (the run's `base_sha`) and `{root}`. The source is `final_gates_source` in `summary.json`, an unapproved profile is marked. Missing tool = failure |
+| `final.timeout` | 1800 | seconds per command |
+| `units[].id` | required | unique, `[A-Za-z0-9_.-]+` |
+| `units[].title` | `id` | title |
+| `units[].deps` | `[]` | ids of units that must be merged into the integration branch |
+| `units[].risk` | `high` | `low` or `high` |
+| `units[].requirements` | `[]` | requirement ids; informational and go into the unit's spec |
+| `units[].files` | `[]` | the unit's files; a shared file without a dependency between units = configuration error |
+| `units[].spec` / `spec_file` | one of the two is required | the unit's text; `spec_file` — a path next to `queue.yaml` |
 
-Без PyYAML файл читается как JSON.
+Without PyYAML the file is read as JSON.
 
-## Проверка перед стартом (выход 3, все проблемы списком, ничего не создаётся)
-Повторяющийся id, неизвестная зависимость, цикл, неверный `risk`, нет текста спеки, пересечение файлов, грязное дерево (изменения отслеживаемых файлов), нет `base`, занятая интеграционная ветка.
+## Pre-start validation (exit 3, all problems as a list, nothing is created)
+Duplicate id, unknown dependency, cycle, invalid `risk`, no spec text, overlapping files, dirty tree (changes to tracked files), no `base`, occupied integration branch.
 
-## Ход прогона
-| Шаг | Что происходит |
+## Run flow
+| Step | What happens |
 |---|---|
-| Выбор | первая `pending` единица, все `deps` которой `merged`; по одной, с `parallel: N` — до N сразу. Слоты по лимиту аккаунта (последний `rate_limit_event` сессий, `<run>/rate.json`): загрузка 5-часового окна ≥ 75 % → N/2, ≥ 90 % или `allowed_warning` → 1, окно `rejected` → новые единицы не стартуют до `resetsAt` |
-| Ветка | `powerpuff/<run_id>/<id>` от текущей вершины интеграционной ветки, worktree `.powerpuff/runs/<run_id>/wt/<id>` |
-| Запуск | `forge_run.py <wt>/.forge-unit-spec.md --repo <wt> ... --no-wait --stream`, вывод в `<run>/<id>.log` |
-| Код 0 | `done`; риск из `auto_merge` → `git merge --no-ff` в интеграционном worktree → `merged`; конфликт → `failed` («merge conflict»), ветка остаётся |
-| Код 0, риск не в `auto_merge` | остаётся `done` до аудита; зависимые → `blocked` («awaits audit of Ux») |
-| Код 1 | осталась попытка (`max_attempts`) → копия `.forge` в `forge/<id>.attemptN`, worktree и ветка удаляются, новая попытка от текущей вершины; иначе `failed` (`... (after N attempts; needs a human)`) |
-| Код 1, `stuck:` | раунд исправления ничего не изменил: `needs-answer` без повтора, причина + начало `.forge/disputes.md`; решение — в `.forge/questions.json` (`answer`), повторный запуск продолжает раунды в том же worktree |
-| Код 1, блокирующие вопросы | `needs-answer`, причина `<причина forge>; answer in <wt>/.forge/questions.json and rerun`; зависимые → `blocked` («dep Ux needs-answer») |
-| Код 3 | ожидание сброса лимита (`resetsAt` из `rate_limit_event`, иначе время из текста; не дольше остатка часов) и повтор той же стадии в том же worktree; с `--no-wait` прогон завершается с кодом 3, состояние сохранено |
-| Код 3, `FORGE: paused (API unreachable)` | не провал и не сбой: пауза с нарастающим ожиданием 30 с … 15 мин и повтор той же единицы (всего не дольше `--max-outage-min`, 120, и остатка часов); с `--no-wait` или после предела прогон завершается с кодом 3, единица остаётся `running` (причина `API unreachable`), повторный запуск продолжает с того же этапа |
-| Иной код | одна повторная попытка (forge продолжит с места), затем `failed` |
-| Зависимость `failed`/`blocked`/`skipped-budget`/`done` | единица `blocked`, независимые продолжаются |
+| Selection | the first `pending` unit whose `deps` are all `merged`; one at a time, with `parallel: N` — up to N at once. Slots by account limit (the sessions' last `rate_limit_event`, `<run>/rate.json`): 5-hour window load ≥ 75 % → N/2, ≥ 90 % or `allowed_warning` → 1, window `rejected` → no new units start until `resetsAt` |
+| Branch | `powerpuff/<run_id>/<id>` from the current tip of the integration branch, worktree `.powerpuff/runs/<run_id>/wt/<id>` |
+| Launch | `forge_run.py <wt>/.forge-unit-spec.md --repo <wt> ... --no-wait --stream`, output to `<run>/<id>.log` |
+| Code 0 | `done`; risk in `auto_merge` → `git merge --no-ff` in the integration worktree → `merged`; conflict → `failed` ("merge conflict"), the branch stays |
+| Code 0, risk not in `auto_merge` | stays `done` until the audit; dependents → `blocked` ("awaits audit of Ux") |
+| Code 1 | an attempt remains (`max_attempts`) → copy of `.forge` to `forge/<id>.attemptN`, worktree and branch are deleted, a new attempt from the current tip; otherwise `failed` (`... (after N attempts; needs a human)`) |
+| Code 1, `stuck:` | the fix round changed nothing: `needs-answer` without retry, reason + the start of `.forge/disputes.md`; the decision goes into `.forge/questions.json` (`answer`), a re-run continues the rounds in the same worktree |
+| Code 1, blocking questions | `needs-answer`, reason `<forge reason>; answer in <wt>/.forge/questions.json and rerun`; dependents → `blocked` ("dep Ux needs-answer") |
+| Code 3 | wait for the limit reset (`resetsAt` from `rate_limit_event`, otherwise the time from the text; no longer than the remaining hours) and repeat the same stage in the same worktree; with `--no-wait` the run ends with code 3, state saved |
+| Code 3, `FORGE: paused (API unreachable)` | not a failure and not a crash: a pause with growing wait 30 s … 15 min and a retry of the same unit (in total no longer than `--max-outage-min`, 120, and the remaining hours); with `--no-wait` or after the limit the run ends with code 3, the unit stays `running` (reason `API unreachable`), a re-run continues from the same stage |
+| Other code | one retry (forge continues from where it stopped), then `failed` |
+| Dependency `failed`/`blocked`/`skipped-budget`/`done` | the unit is `blocked`, independent ones continue |
 
-Рабочая копия пользователя не затрагивается: слияния идут в отдельном worktree `wt/_integration`, HEAD не двигается. Worktree слитых единиц удаляются (ветки и копия `.forge` остаются), остальные ждут аудита.
+The user's working copy is not touched: merges go into a separate worktree `wt/_integration`, HEAD does not move. Worktrees of merged units are deleted (branches and the `.forge` copy stay), the rest wait for the audit.
 
-## Бюджет
-- Лимит единицы: `budget.unit_usd`, иначе `min(остаток, max_usd * (1 - fix_reserve) / число_единиц * 2)`.
-- Base check: дерево, на котором гейты уже были зелёными (база прошлой единицы или итог `done`-единицы), второй раз не проверяется — `forge_run.py --skip-base-check` (setup всё равно выполняется). Список — `verified_trees` в `state.json`.
-- Остаток меньше лимита или часы вышли → оставшиеся `skipped-budget`.
-- Стоимость берётся из `.forge/state.json` каждой единицы.
-- Повторный запуск возвращает `needs-answer`, `blocked` и `skipped-budget` в `pending`; `needs-answer` единица продолжается в том же worktree (аудит не повторяется) после заполнения `answer` в `.forge/questions.json`; `done` единица, уже слитая вручную, помечается `merged`.
+## Budget
+- Unit limit: `budget.unit_usd`, otherwise `min(remainder, max_usd * (1 - fix_reserve) / number_of_units * 2)`.
+- Base check: a tree on which the gates were already green (the previous unit's base or the result of a `done` unit) is not checked a second time — `forge_run.py --skip-base-check` (setup still runs). The list is `verified_trees` in `state.json`.
+- Remainder below the limit or hours exhausted → the remaining units are `skipped-budget`.
+- Cost is taken from each unit's `.forge/state.json`.
+- A re-run returns `needs-answer`, `blocked` and `skipped-budget` to `pending`; a `needs-answer` unit continues in the same worktree (the audit is not repeated) after `answer` is filled in `.forge/questions.json`; a `done` unit already merged by hand is marked `merged`.
 
-## Состояние и результат
-| Файл (`<repo>/.powerpuff/runs/<run_id>/`) | Содержимое |
+## State and result
+| File (`<repo>/.powerpuff/runs/<run_id>/`) | Contents |
 |---|---|
-| `state.json` | на единицу: `status` (pending, running, done, merged, failed, needs-answer, blocked, skipped-budget), `branch`, `worktree`, `forge_status`, `cost`, `started`, `finished`, `reason`; итоги: стоимость по моделям, время |
-| `<id>.log` | вывод `forge_run.py` |
-| `forge/<id>/` | копия `.forge` единицы (отчёт, требования, состояние, проверка) |
-| `SUMMARY.md` | таблица единиц, итоги, ожидающие аудита, заблокированные, тяжёлый контур |
-| `summary.json` | то же машиночитаемо; ключ `needs_answer`: `[{id, reason}]` (в `SUMMARY.md` — раздел `## Needs answer`); на единицу: путь к `REPORT.md`, строки `D`/`Q`, открытые пробелы, результат guard |
+| `state.json` | per unit: `status` (pending, running, done, merged, failed, needs-answer, blocked, skipped-budget), `branch`, `worktree`, `forge_status`, `cost`, `started`, `finished`, `reason`; totals: cost by model, time |
+| `<id>.log` | `forge_run.py` output |
+| `forge/<id>/` | copy of the unit's `.forge` (report, requirements, state, check) |
+| `SUMMARY.md` | table of units, totals, those awaiting audit, blocked ones, heavy contour |
+| `summary.json` | the same, machine-readable; key `needs_answer`: `[{id, reason}]` (in `SUMMARY.md` — the section `## Needs answer`); per unit: path to `REPORT.md`, `D`/`Q` lines, open gaps, guard result |
 
-`.powerpuff/`, `.forge/` и `.forge-unit-spec.md` добавляются в `.git/info/exclude`.
+`.powerpuff/`, `.forge/` and `.forge-unit-spec.md` are added to `.git/info/exclude`.
 
-## Коды выхода и последняя строка
-| Код | Строка | Условие |
+## Exit codes and last line
+| Code | Line | Condition |
 |---|---|---|
-| 0 | `QUEUE: done` | все единицы `merged` или `done`, тяжёлый контур зелёный |
-| 2 | `QUEUE: partial` | есть `merged`/`done`, но не все, или упал тяжёлый контур |
-| 1 | `QUEUE: failed` | ни одной `merged`/`done` |
-| 3 | `QUEUE: config error` / нет строки | ошибка конфигурации; лимит с `--no-wait`; API недоступен (`--no-wait` или `--max-outage-min` исчерпан) |
-| 4 | `QUEUE: paused after <id>` | `--attended`, остались единицы |
+| 0 | `QUEUE: done` | all units `merged` or `done`, heavy contour green |
+| 2 | `QUEUE: partial` | some `merged`/`done`, but not all, or the heavy contour failed |
+| 1 | `QUEUE: failed` | no `merged`/`done` at all |
+| 3 | `QUEUE: config error` / no line | configuration error; limit with `--no-wait`; API unavailable (`--no-wait` or `--max-outage-min` exhausted) |
+| 4 | `QUEUE: paused after <id>` | `--attended`, units remain |
 
-Тяжёлый контур запускается один раз для данной вершины интеграционной ветки и только если слита хотя бы одна единица; провал статусы единиц не меняет.
+The heavy contour runs once for a given integration branch tip and only if at least one unit is merged; a failure does not change unit statuses.

@@ -124,8 +124,8 @@ def test_high_risk_card_has_diff_gates_and_requirements(tmp_path):
     run, repo = copy_run(tmp_path), make_repo(tmp_path)
     c = {x["id"]: x for x in cards_of(run, repo)["cards"]}["unit:U2"]
     fields = {x["label"]: x["value"] for x in c["fields"]}
-    assert "b.txt" in fields["Дифф-стат"] and "gate lint: ok" in fields["Гейты"]
-    assert "D1" in fields["Решения и требования"] and "R2" in fields["Решения и требования"]
+    assert "b.txt" in fields["Diff stat"] and "gate lint: ok" in fields["Gates"]
+    assert "D1" in fields["Decisions and requirements"] and "R2" in fields["Decisions and requirements"]
     assert "+u2" in c["details"][0]["text"]
 
 
@@ -171,7 +171,7 @@ def test_missing_forge_snapshots_and_repo_degrade(tmp_path):
     ids = [c["id"] for c in data["cards"]]
     assert "unit:U2" in ids and "unit:U3" in ids and ids[-1] == "summary"
     u2 = {x["id"]: x for x in data["cards"]}["unit:U2"]
-    assert "недоступен" in json.dumps(u2["fields"], ensure_ascii=False)
+    assert "unavailable" in json.dumps(u2["fields"], ensure_ascii=False)
     audit_cards.render_html(data)
 
 
@@ -179,7 +179,7 @@ def test_unknown_branch_degrades(tmp_path):
     run, repo = copy_run(tmp_path), make_repo(tmp_path)
     git(repo, "branch", "-D", "powerpuff/fx/U7")
     c = {x["id"]: x for x in cards_of(run, repo)["cards"]}["unit:U7"]
-    assert "не найдена" in json.dumps(c["fields"], ensure_ascii=False)
+    assert "not found" in json.dumps(c["fields"], ensure_ascii=False)
 
 
 def test_unreadable_summary_exit_3(tmp_path):

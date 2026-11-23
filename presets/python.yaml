@@ -1,5 +1,5 @@
-# Пресет Python. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
-# Инструменты: python, pytest; ruff; pyright или mypy; coverage; import-linter; lizard; mutmut.
+# Python preset. Reads scripts/profile_init.py; format and `needs` conditions are in docs/profile.md.
+# Tools: python, pytest; ruff; pyright or mypy; coverage; import-linter; lizard; mutmut.
 stack: python
 detect: ["pyproject.toml", "setup.py", "setup.cfg", "requirements*.txt", "Pipfile"]
 gates:

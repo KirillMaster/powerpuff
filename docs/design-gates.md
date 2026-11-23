@@ -1,89 +1,89 @@
-# Слой quality gates: решают скрипты, а не LLM (дизайн, 2026-11-17)
+# Quality gates layer: scripts decide, not the LLM (design, 2026-11-17)
 
-Источники: `docs/research/quality-gates-evidence.md`, разбор гейтов bob-pipeline и пакета `KirillMaster.QualityGates`.
+Sources: `docs/research/quality-gates-evidence.md`, an analysis of the bob-pipeline gates and of the `KirillMaster.QualityGates` package.
 
-## Правило
-**Модель предлагает, скрипт решает.** Ни одно утверждение модели («тесты зелёные», «готово», «покрыто») не влияет на вердикт. Вердикт — это коды выхода команд, которые запустил сам драйвер.
+## Rule
+**The model proposes, the script decides.** No statement by the model ("tests are green", "done", "covered") affects the verdict. The verdict is the exit codes of commands that the driver itself ran.
 
-| № | Правило | Почему |
+| No. | Rule | Why |
 |---|---|---|
-| 1 | Гейт — команда с кодом выхода; запускает её драйвер, а не модель | в bob-pipeline коды выхода линтера и тестов брались из отчётов, которые писали роли |
-| 2 | Нет инструмента или отчёта — гейт провален, а не пропущен | в bob-pipeline отсутствующий инструмент считался пройденным |
-| 3 | Состав и пороги гейтов лежат в репозитории и утверждены человеком; модель пишет только черновик при первом запуске | сейчас гейты на каждый прогон выбирает аудит — это дыра |
-| 4 | Гейты считают только новый код (дифф), старые нарушения — в защищённом списке | 89% проблем в PR агентов — сложность, дубли, мёртвые параметры; чинить весь старый код в автономном прогоне незачем |
-| 5 | Защита от обхода проверяется по диффу | агенты подгоняют код под проверку и правят тесты; чаще при неоднозначной задаче |
-| 6 | Единый формат результата `quality-report.json` | один драйвер читает гейты любого стека |
-| 7 | Проверка LLM — совещательная: её находки превращаются в тесты или карточки, но не в вердикт | судьи-модели ненадёжны |
+| 1 | A gate is a command with an exit code; the driver runs it, not the model | in bob-pipeline the linter and test exit codes were taken from reports written by the roles |
+| 2 | No tool or report — the gate fails, it is not skipped | in bob-pipeline a missing tool counted as passed |
+| 3 | The set of gates and thresholds live in the repository and are approved by a human; the model writes only a draft on first run | currently the audit chooses the gates for each run — that is a hole |
+| 4 | Gates count only new code (the diff); old violations go in a protected list | 89% of problems in agent PRs are complexity, duplicates, dead parameters; there is no point fixing all the old code in an autonomous run |
+| 5 | Bypass protection is checked on the diff | agents fit code to the check and edit tests; more often on an ambiguous task |
+| 6 | A single result format `quality-report.json` | one driver reads the gates of any stack |
+| 7 | LLM checking is advisory: its findings become tests or cards, but not a verdict | judge models are unreliable |
 
-## Защита от обхода (скрипт `gate_guard`, по диффу от базового коммита)
-| Что ловит | Как |
+## Bypass protection (script `gate_guard`, on the diff from the base commit)
+| What it catches | How |
 |---|---|
-| Правка или удаление замороженных тестов | sha256 (уже есть) |
-| Пропуск тестов | добавленные `Skip=`, `.skip(`, `xit(`, `@pytest.mark.skip`, `[Ignore]` |
-| Подавление предупреждений | добавленные `#pragma warning disable`, `SuppressMessage`, `eslint-disable`, `@ts-ignore`, `# noqa`, `# type: ignore` |
-| Ослабление конфигов | изменения в файлах профиля, конфигах линтера, анализаторов и покрытия, в списке старых нарушений |
-| Уменьшение числа тестов | количество тестов после ≥ количества до |
-Красный на базе: после заморозки тестов драйвер один раз гоняет тестовые гейты (ключ профиля `test_gates`, иначе id с `test`) на дереве без реализации; зелёные тесты ничего не доказывают — одна сессия дописывает падающие тесты, а если и после неё зелено, отчёт помечает прогон «vacuous».
-Исключения — только списком в профиле, который утверждает человек. Хардкод ожидаемых значений этим не ловится; против него — приёмка сильной моделью и мутации на диффе.
+| Editing or deleting frozen tests | sha256 (already exists) |
+| Skipping tests | added `Skip=`, `.skip(`, `xit(`, `@pytest.mark.skip`, `[Ignore]` |
+| Suppressing warnings | added `#pragma warning disable`, `SuppressMessage`, `eslint-disable`, `@ts-ignore`, `# noqa`, `# type: ignore` |
+| Weakening configs | changes to profile files, linter, analyzer and coverage configs, the old-violations list |
+| Reducing the number of tests | test count after ≥ test count before |
+Red on base: after the tests are frozen, the driver runs the test gates once (profile key `test_gates`, otherwise ids containing `test`) on the tree without the implementation; green tests prove nothing — one session adds failing tests, and if it is still green after that, the report marks the run "vacuous".
+Exceptions only as a list in the profile that a human approves. Hardcoding of expected values is not caught by this; against it there is acceptance by a strong model and mutations on the diff.
 
-## Когда что запускается
-| Уровень | Гейты | Цена |
+## What runs when
+| Level | Gates | Cost |
 |---|---|---|
-| Каждая итерация писателя | сборка с предупреждениями как ошибками, формат, линтер, типы, быстрые тесты, `gate_guard` | секунды–минуты |
-| Единица работы (перед «готово») | приёмочные тесты, архитектурные правила, покрытие диффа, сложность и дубли по изменённым файлам, дифф публичного API, «новый тест падает на чистой базе» | минуты |
-| Конец автономного прогона (интеграционная ветка) | мутации на диффе, интеграционные и контрактные тесты, сканер секретов и уязвимостей, длительный прогон | десятки минут |
-Данных о том, что строгие гейты снижают успех задач, не найдено; замеров времени тоже нет, поэтому уровни уточняются по первым прогонам.
+| Each writer iteration | build with warnings as errors, format, linter, types, fast tests, `gate_guard` | seconds–minutes |
+| Unit of work (before "done") | acceptance tests, architecture rules, diff coverage, complexity and duplicates over changed files, public API diff, "the new test fails on a clean base" | minutes |
+| End of the autonomous run (integration branch) | mutations on the diff, integration and contract tests, secret and vulnerability scanner, long run | tens of minutes |
+No data was found that strict gates reduce task success; there are no time measurements either, so the levels will be refined on the first runs.
 
-## Любой стек: ядро знает только контракт
-Ядро не знает ни одного языка. Гейт для него — строка `идентификатор → команда` в профиле проекта; команда вернула 0 — пройден. Проект на Rust, Go, Java или чём угодно подключается одним профилем, без изменений в плагине.
+## Any stack: the core knows only the contract
+The core knows no language. For it a gate is a line `identifier → command` in the project profile; the command returned 0 — passed. A project in Rust, Go, Java or anything else is plugged in with a single profile, with no changes to the plugin.
 
-| Слой | Что в нём | Привязка к стеку |
+| Layer | What is in it | Stack binding |
 |---|---|---|
-| Ядро | запуск команд, коды выхода, `quality-report.json`, уровни (итерация / единица / конец прогона), защита от обхода | нет |
-| Таблица языков для защиты от обхода | признаки тестовых файлов, пропуска тестов, подавления предупреждений, объявления теста | данные, а не код; дополняется в профиле проекта |
-| Готовые профили (пресеты) | типовые команды для стека | необязательны; первый черновик профиля аудит пишет по манифестам |
+| Core | running commands, exit codes, `quality-report.json`, levels (iteration / unit / end of run), bypass protection | none |
+| Language table for bypass protection | signs of test files, test skipping, warning suppression, test declaration | data, not code; extended in the project profile |
+| Ready-made profiles (presets) | typical commands for a stack | optional; the audit writes the first profile draft from the manifests |
 
-Пресеты — только стартовые значения, их можно менять:
-| Стек | Итерация | Единица | Конец прогона |
+Presets are only starting values, they can be changed:
+| Stack | Iteration | Unit | End of run |
 |---|---|---|---|
-| .NET | `dotnet build -warnaserror`, `dotnet format --verify-no-changes`, `dotnet test` с пакетом `KirillMaster.QualityGates.Build` | `qg pr` (новые нарушения, покрытие диффа, дубли, архитектура, сложность) | `qg mutation-diff` |
-| TypeScript | `tsc --noEmit`, ESLint, Prettier, быстрые тесты | dependency-cruiser, покрытие диффа | Stryker на диффе |
-| Python | ruff, pyright, pytest | import-linter, diff-cover | mutmut на диффе |
+| .NET | `dotnet build -warnaserror`, `dotnet format --verify-no-changes`, `dotnet test` with the `KirillMaster.QualityGates.Build` package | `qg pr` (new violations, diff coverage, duplicates, architecture, complexity) | `qg mutation-diff` |
+| TypeScript | `tsc --noEmit`, ESLint, Prettier, fast tests | dependency-cruiser, diff coverage | Stryker on the diff |
+| Python | ruff, pyright, pytest | import-linter, diff-cover | mutmut on the diff |
 | Rust | `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test` | `cargo llvm-cov` + diff-cover, `cargo deny` | `cargo mutants --in-diff` |
-| Go | `gofmt -l`, `go vet`, golangci-lint, `go test` | покрытие диффа, `go-arch-lint` | мутации на диффе |
-| Любой | — | lizard (сложность), jscpd (дубли), diff-cover, сканер секретов | — |
-Пресеты для Rust и Go составлены по документации инструментов и на своих прогонах ещё не проверены.
+| Go | `gofmt -l`, `go vet`, golangci-lint, `go test` | diff coverage, `go-arch-lint` | mutations on the diff |
+| Any | — | lizard (complexity), jscpd (duplicates), diff-cover, secret scanner | — |
+The Rust and Go presets were written from the tools' documentation and have not yet been verified on real runs.
 
-Если для языка нет записи в таблице, защита от обхода по-прежнему охраняет защищённые файлы и замороженные тесты, а в отчёте пишет, что по этому языку она слепа.
+If a language has no entry in the table, bypass protection still guards the protected files and frozen tests, and the report says that it is blind for that language.
 
-Формат результата (совпадает с контрактом `qg`):
+Result format (matches the `qg` contract):
 ```json
-{"schema": 1, "tool": "<пакет>", "gates": [{"id": "tests", "status": "passed|failed|skipped", "blocking": true, "value": 74.2, "threshold": 80}]}
+{"schema": 1, "tool": "<package>", "gates": [{"id": "tests", "status": "passed|failed|skipped", "blocking": true, "value": 74.2, "threshold": 80}]}
 ```
-Зелёный отчёт — нет гейта с `blocking: true` и `failed`. Для powerpuff дополнительно: обязательный гейт со статусом `skipped` считается проваленным.
+A green report is one with no gate that has `blocking: true` and `failed`. For powerpuff additionally: a required gate with status `skipped` counts as failed.
 
-## Профиль проекта (`powerpuff.yaml`, в репозитории)
+## Project profile (`powerpuff.yaml`, in the repository)
 ```yaml
 stack: dotnet            # dotnet | typescript | python | mixed
 gates:
   iteration: [build, format, lint, tests-fast, guard]
   unit:      [acceptance, architecture, diff-coverage, complexity, duplication, api-diff]
   final: [mutation-diff, integration, secrets]
-commands:                # команда на каждый идентификатор; для .NET по умолчанию `qg run --gate <id>`
+commands:                # a command for each identifier; for .NET the default is `qg run --gate <id>`
   build: dotnet build -warnaserror
 protected: [powerpuff.yaml, .editorconfig, Directory.Build.props, quality/**]
-allow_suppressions: []   # исключения для gate_guard
+allow_suppressions: []   # exceptions for gate_guard
 ```
-Первый черновик пишет аудит по манифестам; пока человек его не утвердил, отчёт прогона помечается «гейты не утверждены».
+The audit writes the first draft from the manifests; until a human approves it, the run report is marked "gates not approved".
 
-## Режим с присутствием
-Те же скрипты вешаются хуками Claude Code: хук Stop запускает гейты уровня итерации и кодом 2 не даёт завершить ход; PreToolUse блокирует правку защищённых файлов. Так правило действует и без драйвера автономного режима.
+## Attended mode
+The same scripts are hooked into Claude Code: the Stop hook runs the iteration-level gates and with exit code 2 prevents ending the turn; PreToolUse blocks edits to protected files. This way the rule applies even without the autonomous-mode driver.
 
-## Порядок работ
-1. `gate_guard` и запуск гейтов по `powerpuff.yaml` в `forge_check` (замена `.forge/gates.json`).
-2. Адаптер `quality-report.json` для .NET через `qg`; затем TypeScript и Python.
-3. Хуки для режима с присутствием.
-4. Каждый гейт остаётся, только если на бенче или в пилоте он поймал дефект, который иначе прошёл бы.
+## Order of work
+1. `gate_guard` and running the gates from `powerpuff.yaml` in `forge_check` (replacing `.forge/gates.json`).
+2. A `quality-report.json` adapter for .NET via `qg`; then TypeScript and Python.
+3. Hooks for attended mode.
+4. Each gate stays only if on the bench or in a pilot it caught a defect that would otherwise have passed.
 
-## Гейты единицы по диффу: `diff_gates`
-Покрытие диффа, дубли, сложность и размер единицы — скрипт `scripts/diff_gates.py`, команды профиля с кодом выхода (0/1/3), как `gate_guard`. Ядро знает форматы отчётов (cobertura, lcov, go, coverage.py, jacoco; lizard, eslint, radon, gocyclo, sarif), а не стеки; нет отчёта — код 3, то есть провал. Подробности и команды по стекам: `docs/diff-gates.md`.
+## Unit gates on the diff: `diff_gates`
+Diff coverage, duplicates, complexity and unit size — the script `scripts/diff_gates.py`, profile commands with an exit code (0/1/3), like `gate_guard`. The core knows report formats (cobertura, lcov, go, coverage.py, jacoco; lizard, eslint, radon, gocyclo, sarif), not stacks; no report — code 3, i.e. failure. Details and commands per stack: `docs/diff-gates.md`.

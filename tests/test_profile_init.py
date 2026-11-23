@@ -196,7 +196,7 @@ def test_never_overwrites_existing_profile(tmp_path, monkeypatch, capsys):
     put(tmp_path, "powerpuff.yaml", "approved: true\n")
     tools(monkeypatch, "go", "gofmt", "python")
     rc, out, err = init(tmp_path, capsys, "--write")
-    assert rc == 1 and "не перезаписан" in err and out.startswith("# powerpuff.yaml")
+    assert rc == 1 and "not overwritten" in err and out.startswith("# powerpuff.yaml")
     assert (tmp_path / "powerpuff.yaml").read_text(encoding="utf-8") == "approved: true\n"
 
 
@@ -229,7 +229,7 @@ def test_unknown_stack_gives_skeleton_and_exit_2(tmp_path, capsys):
     put(tmp_path, "run.sh", "echo hi\n")
     rc, out, err = init(tmp_path, capsys)
     assert rc == 2 and "commands: {}" in out and "approved: false" in out and "TODO" not in out
-    assert "нет пресета — профиль пишется вручную" in err and "docs/profile.md" in err
+    assert "no preset - the profile is written by hand" in err and "docs/profile.md" in err
     assert not (tmp_path / "powerpuff.yaml").exists()
 
 

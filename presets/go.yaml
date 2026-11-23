@@ -1,7 +1,7 @@
-# Пресет Go. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
-# Не проверен на реальном репозитории (составлен по документации инструментов).
-# Инструменты: go, gofmt; golangci-lint; go-arch-lint; gremlins (go-gremlins); lizard.
-# Проверка gofmt: сам `gofmt -l` всегда выходит с 0, поэтому обёртка на python по выводу.
+# Go preset. Reads scripts/profile_init.py; format and `needs` conditions are in docs/profile.md.
+# Not verified on a real repository (written from the tools' documentation).
+# Tools: go, gofmt; golangci-lint; go-arch-lint; gremlins (go-gremlins); lizard.
+# gofmt check: `gofmt -l` itself always exits 0, so a python wrapper checks its output.
 stack: go
 detect: ["go.mod"]
 gates:

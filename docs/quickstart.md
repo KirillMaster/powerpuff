@@ -1,26 +1,26 @@
-# Быстрый старт
+# Quick start
 
-Цель: установить плагин, пройти одну спеку через `forge` (движок `plain` по умолчанию), затем цикл подготовка → прогон → аудит. Замер шага 3 — в разделе «Что проверено».
+Goal: install the plugin, take one spec through `forge` (the default `plain` engine), then the prepare → run → audit loop. The step 3 measurement is in the "What was verified" section.
 
-## Требования
-| Что | Условие |
+## Requirements
+| What | Condition |
 |---|---|
-| Python | 3.10+ (в скриптах аннотации `X \| None`) |
-| git | репозиторий проекта, чистое отслеживаемое дерево перед `queue_run.py` |
-| `claude` CLI | в PATH, вход выполнен; драйверы запускают `claude -p` |
-| PyYAML | необязателен; без него `queue.yaml` пишется как JSON, `powerpuff.yaml` читается встроенным разбором (два уровня, списки `[a, b]`) |
-| Инструменты проекта | всё, что вызывают команды профиля (линтер, тесты); нет инструмента = гейт провален |
+| Python | 3.10+ (the scripts use `X \| None` annotations) |
+| git | the project repository, a clean tracked tree before `queue_run.py` |
+| `claude` CLI | in PATH, logged in; the drivers run `claude -p` |
+| PyYAML | optional; without it `queue.yaml` is written as JSON and `powerpuff.yaml` is read by the built-in parser (two levels, `[a, b]` lists) |
+| Project tools | everything the profile commands call (linter, tests); missing tool = gate failed |
 
-## 1. Установка
-В Claude Code:
+## 1. Installation
+In Claude Code:
 ```
 /plugin marketplace add KirillMaster/powerpuff
 /plugin install powerpuff@powerpuff
 ```
-Команды: `/powerpuff:prepare`, `/powerpuff:queue`, `/powerpuff:forge`. Хуки плагина зарегистрированы, но ничего не делают, пока в `powerpuff.yaml` нет секции `hooks:`.
+Commands: `/powerpuff:prepare`, `/powerpuff:queue`, `/powerpuff:forge`. The plugin hooks are registered but do nothing until `powerpuff.yaml` has a `hooks:` section.
 
-## 2. Профиль маленького репозитория
-`powerpuff.yaml` в корне; пример для Python-проекта:
+## 2. Profile for a small repository
+`powerpuff.yaml` at the root; an example for a Python project:
 ```yaml
 approved: true
 gates:
@@ -31,105 +31,105 @@ commands:
 format_fix: "ruff format ."
 protected: [powerpuff.yaml, pyproject.toml]
 ```
-| Правило | Следствие |
+| Rule | Consequence |
 |---|---|
-| Гейт из `gates` без команды в `commands` | `FORGE: failed` до первой сессии |
-| Тестовые гейты — ключ `test_gates`, иначе id с `test` в имени | на них проверяется «приёмочные тесты падают до реализации» |
-| `approved: true` не поставлен | профиль работает, отчёт пишет `profile not approved` |
-| Профиля нет | гейты берутся из пресета стека, черновик — `.forge/powerpuff.draft.yaml`; гейты, красные на нетронутой базе (например, нет инструмента покрытия), исключаются и перечисляются в отчёте; утвердить = сохранить как `powerpuff.yaml` с `approved: true` |
+| A gate in `gates` without a command in `commands` | `FORGE: failed` before the first session |
+| Test gates — the `test_gates` key, otherwise ids with `test` in the name | they are used for the check "acceptance tests fail before implementation" |
+| `approved: true` not set | the profile works, the report says `profile not approved` |
+| No profile | gates come from the stack preset, the draft is `.forge/powerpuff.draft.yaml`; gates that are red on the untouched base (for example, no coverage tool) are excluded and listed in the report; to approve = save as `powerpuff.yaml` with `approved: true` |
 
-Закоммитьте профиль: перед запуском все гейты один раз проходят на нетронутой базе; с утверждённым профилем красная база = отказ (`--allow-red-base` обходит осознанно).
+Commit the profile: before the run all gates pass once on the untouched base; with an approved profile a red base = refusal (`--allow-red-base` bypasses it deliberately).
 
-## 3. Одна спека через forge
-Спека — каталог с `spec.md` (или `spec.yaml`, `plan.md`, `tasks.md`); требования удобно нумеровать `R1`, `R2`…
+## 3. One spec through forge
+A spec is a directory with `spec.md` (or `spec.yaml`, `plan.md`, `tasks.md`); it is convenient to number requirements `R1`, `R2`…
 ```
 /powerpuff:forge specs/001-feature
 ```
-Или напрямую:
+Or directly:
 ```
-python <плагин>/scripts/forge_run.py specs/001-feature --repo . --max-usd 20
+python <plugin>/scripts/forge_run.py specs/001-feature --repo . --max-usd 20
 ```
-Ход движка `plain`: Opus задаёт вопросы по неоднозначностям и пишет приёмочные тесты → скрипт их замораживает и проверяет, что они красные на базе → та же сессия пишет код → скрипт гоняет гейты, красное возвращает в ту же сессию (до 4 раундов). Подробно — `docs/engine-plain.md`; прежний многосессионный конвейер — `--engine forge`.
-| Что | Где |
+Flow of the `plain` engine: Opus asks questions about ambiguities and writes acceptance tests → the script freezes them and checks that they are red on the base → the same session writes the code → the script runs the gates and returns anything red to the same session (up to 4 rounds). Details — `docs/engine-plain.md`; the former multi-session pipeline is `--engine forge`.
+| What | Where |
 |---|---|
-| Прогресс | `.forge/progress.md` |
-| Требования, решения, вопросы | `.forge/requirements.md`, `.forge/questions.json` |
-| Результат | `.forge/REPORT.md`, последняя строка вывода `FORGE: done` или `FORGE: failed` |
-| Состояние | `.forge/state.json`; повторный запуск продолжает с места |
+| Progress | `.forge/progress.md` |
+| Requirements, decisions, questions | `.forge/requirements.md`, `.forge/questions.json` |
+| Result | `.forge/REPORT.md`, the last output line `FORGE: done` or `FORGE: failed` |
+| State | `.forge/state.json`; a re-run resumes from where it stopped |
 
-Блокирующие вопросы без ответа останавливают прогон (`FORGE: failed (blocking questions: …)`, код 1): ответьте в поле `answer` в `.forge/questions.json` и перезапустите — сессия продолжится; `--assume-defaults` берёт ответы по умолчанию сразу.
+Unanswered blocking questions stop the run (`FORGE: failed (blocking questions: …)`, code 1): answer in the `answer` field in `.forge/questions.json` and restart — the session continues; `--assume-defaults` takes the default answers right away.
 
-| Код | Действие |
+| Code | Action |
 |---|---|
-| 0 | `done`: прочитать `.forge/REPORT.md`, раздел решений `D`, строки `gates:` и `guard:` |
-| 1 | причина в `REPORT.md` и последней строке: `base is red: <гейты>` — починить базу; `blocking questions: Q1,Q4` — ответить в `questions.json` и повторить, либо `--assume-defaults`; `cost budget exhausted` / `wall-clock budget exhausted` — поднять `--max-usd` / `--max-hours` и повторить; иное — правка спеки |
-| 3 | лимит подписки при `--no-wait`: повторить после сброса, прогон продолжится |
+| 0 | `done`: read `.forge/REPORT.md`, the decisions section `D`, the `gates:` and `guard:` lines |
+| 1 | the reason is in `REPORT.md` and the last line: `base is red: <gates>` — fix the base; `blocking questions: Q1,Q4` — answer in `questions.json` and repeat, or `--assume-defaults`; `cost budget exhausted` / `wall-clock budget exhausted` — raise `--max-usd` / `--max-hours` and repeat; anything else — edit the spec |
+| 3 | subscription limit with `--no-wait`: repeat after the reset, the run continues |
 
-## 4. Подготовка спеки
+## 4. Spec preparation
 ```
 /powerpuff:prepare specs/001-feature --out queue.yaml
 ```
-Стадии: `spec_lint` → гейты на базе → вопросы → нарезка на единицы → `queue.yaml`. Состояние — `.powerpuff/prepare/<slug>/` (`lint.json`, `questions.json`, `decisions.md`, `units.yaml`, `progress.md`). Последняя строка: `PREPARE: ready queue.yaml`.
+Stages: `spec_lint` → gates on the base → questions → slicing into units → `queue.yaml`. State — `.powerpuff/prepare/<slug>/` (`lint.json`, `questions.json`, `decisions.md`, `units.yaml`, `progress.md`). Last line: `PREPARE: ready queue.yaml`.
 
-| Код | Строка | Действие |
+| Code | Line | Action |
 |---|---|---|
-| 0 | `PREPARE: ready <path>` | проверить шапку `queue.yaml` (число единиц, покрытие требований), запустить очередь |
-| 1 | `PREPARE: failed (<причина>)` | ошибки линтера — править спеку (`--accept-lint` только осознанно); красная база — чинить; невалидная нарезка — список проблем в выводе, черновик остаётся |
-| 3 | `PREPARE: rate limited` | повторить ту же команду после сброса |
-| 4 | `PREPARE: needs answers <questions.json>` | заполнить `answer` блокирующих вопросов (или `--answers файл`, или `--assume-defaults`), повторить команду |
+| 0 | `PREPARE: ready <path>` | check the `queue.yaml` header (number of units, requirement coverage), start the queue |
+| 1 | `PREPARE: failed (<reason>)` | linter errors — fix the spec (`--accept-lint` only deliberately); red base — fix it; invalid slicing — the list of problems is in the output, the draft stays |
+| 3 | `PREPARE: rate limited` | repeat the same command after the reset |
+| 4 | `PREPARE: needs answers <questions.json>` | fill in `answer` for the blocking questions (or `--answers file`, or `--assume-defaults`), repeat the command |
 
-Проверка без затрат: `--dry-run` выполняет только линтер и гейты базы.
+Free check: `--dry-run` runs only the linter and the base gates.
 
-## 5. Автономный прогон
+## 5. Autonomous run
 ```
 /powerpuff:queue queue.yaml --dry-run
 /powerpuff:queue queue.yaml
 ```
-`--dry-run` печатает порядок единиц и бюджет. Прогон идёт отдельным процессом; лог — `.queue-run.log`, на единицу — `.powerpuff/runs/<run_id>/<id>.log`.
+`--dry-run` prints the unit order and the budget. The run goes in a separate process; log — `.queue-run.log`, per unit — `.powerpuff/runs/<run_id>/<id>.log`.
 
-| Файл в `.powerpuff/runs/<run_id>/` | Содержимое |
+| File in `.powerpuff/runs/<run_id>/` | Contents |
 |---|---|
-| `state.json` | статус, ветка, стоимость каждой единицы |
-| `SUMMARY.md`, `summary.json` | итог, ожидающие аудита, заблокированные, финальный контур |
-| `forge/<id>/` | копия `.forge` единицы |
+| `state.json` | status, branch, cost of each unit |
+| `SUMMARY.md`, `summary.json` | totals, those awaiting audit, blocked ones, final contour |
+| `forge/<id>/` | copy of the unit's `.forge` |
 
-| Код | Последняя строка | Действие |
+| Code | Last line | Action |
 |---|---|---|
-| 0 | `QUEUE: done` | перейти к аудиту |
-| 1 | `QUEUE: failed` | ни одной готовой единицы; причины в `SUMMARY.md` и логах единиц |
-| 2 | `QUEUE: partial` | часть сделана; провалы и блокировки идут на аудит |
-| 3 | `QUEUE: config error` | список проблем в выводе, ничего не создано; либо лимит с `--no-wait` — повторить после сброса |
-| 4 | `QUEUE: paused after <id>` | только `--attended`; повторить команду для следующей единицы |
+| 0 | `QUEUE: done` | go to the audit |
+| 1 | `QUEUE: failed` | no unit finished; reasons in `SUMMARY.md` and the unit logs |
+| 2 | `QUEUE: partial` | part done; failures and blocks go to the audit |
+| 3 | `QUEUE: config error` | list of problems in the output, nothing created; or the limit with `--no-wait` — repeat after the reset |
+| 4 | `QUEUE: paused after <id>` | `--attended` only; repeat the command for the next unit |
 
-Единицы с `risk`, не входящим в `auto_merge`, остаются `done` до аудита. Единица `needs-answer` продолжается после ответа в `.forge/questions.json` (путь в причине) и повторного запуска.
+Units whose `risk` is not in `auto_merge` stay `done` until the audit. A `needs-answer` unit continues after the answer in `.forge/questions.json` (the path is in the reason) and a re-run.
 
-## 6. Аудит
+## 6. Audit
 ```
-python <плагин>/scripts/audit_cards.py .powerpuff/runs/<run_id>
+python <plugin>/scripts/audit_cards.py .powerpuff/runs/<run_id>
 ```
-Результат — `.powerpuff/runs/<run_id>/cards.html` (один файл, открывается с `file://`). Решения кнопкой «Export» скачиваются как `answers.yaml`.
+The result is `.powerpuff/runs/<run_id>/cards.html` (a single file, opens from `file://`). Decisions are downloaded with the "Export" button as `answers.yaml`.
 ```
-python <плагин>/scripts/audit_apply.py answers.yaml --run .powerpuff/runs/<run_id> --dry-run
-python <плагин>/scripts/audit_apply.py answers.yaml --run .powerpuff/runs/<run_id>
+python <plugin>/scripts/audit_apply.py answers.yaml --run .powerpuff/runs/<run_id> --dry-run
+python <plugin>/scripts/audit_apply.py answers.yaml --run .powerpuff/runs/<run_id>
 ```
-Результат: `next-queue.yaml` в каталоге прогона, `decisions.md` и `audit-actions.md`. Следующий прогон:
+Result: `next-queue.yaml` in the run directory, `decisions.md` and `audit-actions.md`. The next run:
 ```
 /powerpuff:queue .powerpuff/runs/<run_id>/next-queue.yaml
 ```
-| Код `audit_cards.py` | Действие |
+| `audit_cards.py` code | Action |
 |---|---|
-| 0 | `AUDIT: N cards (M to decide) -> <путь>` |
-| 3 | нет или нечитаем `summary.json` — сначала завершить прогон |
+| 0 | `AUDIT: N cards (M to decide) -> <path>` |
+| 3 | `summary.json` is missing or unreadable — finish the run first |
 
-| Код `audit_apply.py` | Действие |
+| `audit_apply.py` code | Action |
 |---|---|
-| 0 | всё выполнено |
-| 2 | действие не удалось (конфликт слияния, запись ответа): смотреть `FAILED` в выводе, решить вручную |
-| 3 | неверный ввод (чужой `run_id`, неизвестная карточка, недопустимое решение); ничего не изменено; повторное применение тех же ответов на вопросы тоже даёт 3 |
+| 0 | everything done |
+| 2 | an action failed (merge conflict, writing the answer): look at `FAILED` in the output, resolve by hand |
+| 3 | invalid input (foreign `run_id`, unknown card, invalid decision); nothing changed; re-applying the same answers to questions also gives 3 |
 
-## Что проверено
-Шаги 1–3 пройдены 2026-11-19 на свежих репозиториях без профиля (marketplace из локального клона): TypeScript без `node_modules` — `FORGE: done` за ~2 мин и $0.56, Python — за 88 с и $0.50 (`docs/EFFICIENCY.md`).
-Реальным прогоном подтверждён только шаг 3 на одной спеке. Шаги 4–6 покрыты тестами с подставным `claude`; реальные прогоны очереди (критерии 4.1, 5.1, 5.3) открыты. Состояние — `docs/ROADMAP.md`.
+## What was verified
+Steps 1–3 were passed on 2026-11-19 on fresh repositories without a profile (marketplace from a local clone): TypeScript without `node_modules` — `FORGE: done` in ~2 min and $0.56, Python — in 88 s and $0.50 (`docs/EFFICIENCY.md`).
+Only step 3 on a single spec is confirmed by a real run. Steps 4–6 are covered by tests with a stub `claude`; real queue runs (criteria 4.1, 5.1, 5.3) are open. State — `docs/ROADMAP.md`.
 
-## Дальше
-`docs/prepare-format.md`, `docs/queue-format.md`, `docs/audit-format.md` — полные таблицы флагов; `docs/attended-mode.md` — хуки для сессий с человеком.
+## Next
+`docs/prepare-format.md`, `docs/queue-format.md`, `docs/audit-format.md` — full flag tables; `docs/attended-mode.md` — hooks for sessions with a human.

@@ -15,18 +15,18 @@ import sys
 from pathlib import Path
 
 OPTIONS = {
-    "question": [("accept-default", "Принять по умолчанию", "none"), ("answer", "Свой ответ", "required")],
-    "high-risk": [("merge", "Слить", "none"), ("reject", "Отклонить", "optional"), ("rework", "Переделать", "required")],
-    "failure": [("retry", "Повторить как есть", "none"), ("rework", "Переделать", "required"), ("drop", "Отбросить", "none")],
-    "blocked": [("requeue", "В очередь", "none"), ("drop", "Отбросить", "none")],
-    "final": [("fix", "Создать единицу-исправление", "optional"), ("ignore", "Игнорировать", "none")],
+    "question": [("accept-default", "Accept default", "none"), ("answer", "Custom answer", "required")],
+    "high-risk": [("merge", "Merge", "none"), ("reject", "Reject", "optional"), ("rework", "Rework", "required")],
+    "failure": [("retry", "Retry as is", "none"), ("rework", "Rework", "required"), ("drop", "Drop", "none")],
+    "blocked": [("requeue", "Requeue", "none"), ("drop", "Drop", "none")],
+    "final": [("fix", "Create fix unit", "optional"), ("ignore", "Ignore", "none")],
     "summary": [],
 }
 ALLOWED = {k: [o[0] for o in v] for k, v in OPTIONS.items()}
 REQUIRED_TEXT = {(k, o[0]) for k, v in OPTIONS.items() for o in v if o[2] == "required"}
 WAITING = ("blocked", "skipped-budget", "needs-answer")
-GROUPS = {"question": "Вопросы", "high-risk": "Единицы высокого риска", "failure": "Провалы",
-          "blocked": "Заблокированные и не запущенные", "final": "Финальный контур", "summary": "Итог"}
+GROUPS = {"question": "Questions", "high-risk": "High-risk units", "failure": "Failures",
+          "blocked": "Blocked and not run", "final": "Final contour", "summary": "Summary"}
 
 
 def read(p: Path) -> str:
@@ -70,11 +70,11 @@ def diff_info(repo: Path | None, base: str, branch: str, max_lines: int) -> dict
     """{stat, patch, note}: every part may be empty when the repo or the branch is not available."""
     out = {"stat": "", "patch": "", "note": ""}
     if repo is None or git(repo, "rev-parse", "--show-toplevel").returncode != 0:
-        out["note"] = "репозиторий недоступен: дифф не получен"
+        out["note"] = "repository unavailable: diff not retrieved"
         return out
     for ref in (base, branch):
         if not ref or git(repo, "rev-parse", "--verify", "-q", f"{ref}^{{commit}}").returncode != 0:
-            out["note"] = f"ссылка '{ref}' не найдена: дифф не получен"
+            out["note"] = f"ref '{ref}' not found: diff not retrieved"
             return out
     out["stat"] = git(repo, "diff", "--stat", f"{base}...{branch}").stdout.strip()
     out["patch"] = head(git(repo, "diff", f"{base}...{branch}").stdout, max_lines)
@@ -101,7 +101,7 @@ def answered(q: dict) -> bool:
 def gate_lines(check: object) -> tuple[str, str]:
     """(gate results, failing output tail) from check.json."""
     if not isinstance(check, dict):
-        return "нет данных", ""
+        return "no data", ""
     lines, bad = [], []
     for part in ("coverage", "frozen"):
         if isinstance(check.get(part), dict):
@@ -116,7 +116,7 @@ def gate_lines(check: object) -> tuple[str, str]:
         p = check.get(part)
         if isinstance(p, dict) and not p.get("ok", True):
             bad.append(f"[{part}] {json.dumps(p, ensure_ascii=False)[:600]}")
-    return "\n".join(lines) or "нет данных", "\n\n".join(bad)
+    return "\n".join(lines) or "no data", "\n\n".join(bad)
 
 
 def f(label: str, value: object, pre: bool = False) -> dict:
@@ -149,8 +149,8 @@ def build_cards(summary_path: Path, repo: Path | None = None, max_diff: int = 40
                 continue
             qcards.append((0 if cls == "blocking" else 1, card(
                 f"question:{uid}:{qid}", "question", f"{uid} {qid}: {text[:90]}",
-                [f("Единица", f"{uid} - {u.get('title', '')}"), f("Класс", cls), f("Вопрос", text, True),
-                 f("По умолчанию", q.get("default") or "-", True), f("Цена ошибки", q.get("wrong_guess_cost") or "-")],
+                [f("Unit", f"{uid} - {u.get('title', '')}"), f("Class", cls), f("Question", text, True),
+                 f("Default", q.get("default") or "-", True), f("Cost of wrong guess", q.get("wrong_guess_cost") or "-")],
                 meta={"unit": uid, "qid": qid, "default": str(q.get("default") or ""), "question": text})))
     cards = [c for _, c in sorted(qcards, key=lambda x: x[0])]
     for u in (x for x in units if x.get("status") == "done"):
@@ -160,50 +160,50 @@ def build_cards(summary_path: Path, repo: Path | None = None, max_diff: int = 40
         gates, _ = gate_lines(read_json(fd / "check.json") if fd else None)
         check = read_json(fd / "check.json") if fd else None
         guard = json.dumps(check.get("guard"), ensure_ascii=False)[:600] if isinstance(check, dict) and \
-            check.get("guard") is not None else "нет данных"
+            check.get("guard") is not None else "no data"
         d = diff_info(repo, ib or str(s.get("base") or ""), str(u.get("branch") or ""), max_diff)
-        details = [{"label": "Патч", "text": d["patch"] or d["note"] or "пусто"}]
+        details = [{"label": "Patch", "text": d["patch"] or d["note"] or "empty"}]
         if fd and (fd / "REPORT.md").is_file():
-            details.append({"label": "Отчёт", "text": head(read(fd / "REPORT.md"), 60)})
+            details.append({"label": "Report", "text": head(read(fd / "REPORT.md"), 60)})
         cards.append(card(f"unit:{uid}", "high-risk", f"{uid}: {u.get('title', '')}",
-                          [f("Риск", u.get("risk", "")), f("Ветка", u.get("branch", "")),
-                           f("Решения и требования", "\n".join(req_lines) or "-", True),
-                           f("Дифф-стат", d["stat"] or d["note"] or "-", True), f("Гейты", gates, True),
+                          [f("Risk", u.get("risk", "")), f("Branch", u.get("branch", "")),
+                           f("Decisions and requirements", "\n".join(req_lines) or "-", True),
+                           f("Diff stat", d["stat"] or d["note"] or "-", True), f("Gates", gates, True),
                            f("Guard", guard, True)], details, {"unit": uid}))
     for u in (x for x in units if x.get("status") == "failed"):
         uid, fd = str(u["id"]), forge_dir(run_dir, u)
         _, bad = gate_lines(read_json(fd / "check.json") if fd else None)
         details = []
         if fd and (fd / "REPORT.md").is_file():
-            details.append({"label": "Отчёт (начало)", "text": head(read(fd / "REPORT.md"), 40)})
+            details.append({"label": "Report (head)", "text": head(read(fd / "REPORT.md"), 40)})
         if bad:
-            details.append({"label": "Упавшие проверки", "text": bad})
+            details.append({"label": "Failed checks", "text": bad})
         log = read(run_dir / f"{uid}.log")
         if log:
-            details.append({"label": "Лог (конец)", "text": tail(log, 30)})
+            details.append({"label": "Log (tail)", "text": tail(log, 30)})
         cards.append(card(f"unit:{uid}", "failure", f"{uid}: {u.get('title', '')}",
-                          [f("Причина", u.get("reason") or "-", True), f("Ветка", u.get("branch", ""))], details,
+                          [f("Reason", u.get("reason") or "-", True), f("Branch", u.get("branch", ""))], details,
                           {"unit": uid}))
     for u in (x for x in units if x.get("status") in WAITING):
         uid = str(u["id"])
         cards.append(card(f"unit:{uid}", "blocked", f"{uid}: {u.get('status')}",
-                          [f("Единица", f"{uid} - {u.get('title', '')}"), f("Статус", u.get("status")),
-                           f("Причина", u.get("reason") or "-", True)], meta={"unit": uid}))
+                          [f("Unit", f"{uid} - {u.get('title', '')}"), f("Status", u.get("status")),
+                           f("Reason", u.get("reason") or "-", True)], meta={"unit": uid}))
     for name, r in (s.get("final") or {}).items():
         if isinstance(r, dict) and not r.get("ok"):
-            cards.append(card(f"final:{name}", "final", f"Финальная команда {name} упала",
-                              [f("Код выхода", r.get("code")), f("Вывод (конец)", tail(str(r.get("tail") or ""), 30), True)],
+            cards.append(card(f"final:{name}", "final", f"Final command {name} failed",
+                              [f("Exit code", r.get("code")), f("Output (tail)", tail(str(r.get("tail") or ""), 30), True)],
                               meta={"name": str(name), "code": r.get("code"), "tail": str(r.get("tail") or "")[-2000:]}))
     counts: dict[str, int] = {}
     for u in units:
         counts[str(u.get("status"))] = counts.get(str(u.get("status")), 0) + 1
     cost = s.get("cost") or {}
     by_model = "\n".join(f"{m}: {v}" for m, v in (cost.get("by_model") or {}).items()) or "-"
-    summary = card("summary", "summary", f"Итог прогона {s.get('run_id', '')}: {s.get('status', '')}",
-                   [f("Единицы", ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "-"),
-                    f("Стоимость, USD", cost.get("total_usd", 0)), f("По моделям", by_model, True),
-                    f("Время, мин", s.get("elapsed_min", 0)), f("База", s.get("base", "")),
-                    f("Интеграционная ветка", ib)])
+    summary = card("summary", "summary", f"Run summary {s.get('run_id', '')}: {s.get('status', '')}",
+                   [f("Units", ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "-"),
+                    f("Cost, USD", cost.get("total_usd", 0)), f("By model", by_model, True),
+                    f("Time, min", s.get("elapsed_min", 0)), f("Base", s.get("base", "")),
+                    f("Integration branch", ib)])
     summary["info_questions"] = info_q
     cards.append(summary)
     return {"run_id": str(s.get("run_id") or run_dir.name), "groups": GROUPS, "cards": cards}
@@ -235,7 +235,7 @@ textarea,input{width:100%;box-sizing:border-box;background:var(--bg);color:var(-
 #out{height:160px;font:12px ui-monospace,monospace}
 </style></head><body>
 <header><b>powerpuff audit <span id="rid"></span></b><span id="prog"></span><button id="exp">Export (e)</button></header>
-<p class="k">j/k - следующая/предыдущая карточка, 1-9 - выбор варианта, e - экспорт. Решения хранятся в localStorage.</p>
+<p class="k">j/k - next/previous card, 1-9 - pick an option, e - export. Decisions are stored in localStorage.</p>
 <div id="root"></div>
 <div id="exportbox" hidden><h3>answers.yaml</h3><textarea id="out" readonly></textarea></div>
 <script id="data" type="application/json">__DATA__</script>
@@ -263,11 +263,11 @@ function build(){var root=document.getElementById('root'),last='';document.getEl
   c.fields.forEach(function(x){var r=el('div');r.appendChild(el('span','k',x.label+': '));
    if(x.pre){r.appendChild(el('pre','',x.value))}else{r.appendChild(el('span','',x.value))}e.appendChild(r)});
   c.details.forEach(function(x){var d=el('details');d.appendChild(el('summary','',x.label));d.appendChild(el('pre','',x.text));e.appendChild(d)});
-  if(c.info_questions&&c.info_questions.length){var d=el('details');d.appendChild(el('summary','','Информационные вопросы ('+c.info_questions.length+')'));
+  if(c.info_questions&&c.info_questions.length){var d=el('details');d.appendChild(el('summary','','Informational questions ('+c.info_questions.length+')'));
    d.appendChild(el('pre','',c.info_questions.map(function(x){return x.unit+' '+x.id+': '+x.question}).join('\n')));e.appendChild(d)}
   if(c.options.length){var o=el('div','opts');c.options.forEach(function(op,j){var b=el('button','',(j+1)+' '+op.label);b.dataset.key=op.key;
     b.addEventListener('click',function(){choose(c,op.key)});o.appendChild(b)});e.appendChild(o);
-   var t=el('textarea');t.rows=2;t.placeholder='Комментарий / ответ';t.value=(dec[c.id]||{}).text||'';
+   var t=el('textarea');t.rows=2;t.placeholder='Comment / answer';t.value=(dec[c.id]||{}).text||'';
    t.addEventListener('input',function(){dec[c.id]=dec[c.id]||{decision:'',text:''};dec[c.id].text=t.value;save();paint()});e.appendChild(t)}
   root.appendChild(e)});paint()}
 function exportYaml(){var out=['run_id: '+q(D.run_id),'decided_at: '+q(new Date().toISOString())],n=0,rows=[];

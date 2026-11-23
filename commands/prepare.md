@@ -1,29 +1,29 @@
 ---
-description: Подготовка спеки — идея, файл или каталог спеки -> queue.yaml для автономного прогона. Скрипт оркестрирует, модель только предлагает; вопросы к человеку по ходу
+description: Spec preparation — an idea, a file or a spec directory -> queue.yaml for an autonomous run. The script orchestrates, the model only proposes; questions to the human along the way
 argument-hint: "<spec-dir | spec file | \"idea text\"> [--out queue.yaml] [--max-unit-lines N] [--max-usd N] [--accept-lint] [--assume-defaults] [--dry-run]"
 ---
 
-# /powerpuff:prepare — подготовка спеки
+# /powerpuff:prepare — spec preparation
 
-Оркестратор — скрипт `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_run.py`, не вы. Ничего не реализуйте и не нарезайте сами. Формат: `docs/prepare-format.md` в плагине.
+The orchestrator is the script `${CLAUDE_PLUGIN_ROOT}/scripts/prepare_run.py`, not you. Do not implement or slice anything yourself. Format: `docs/prepare-format.md` in the plugin.
 
 1. `<root>` = `git rev-parse --show-toplevel`.
-2. В ПЕРЕДНЕМ плане, из `<root>`, `$ARGUMENTS` без изменений: `python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_run.py $ARGUMENTS --repo <root>`. Текст идеи с пробелами — в кавычках.
-3. Код выхода по последней строке вывода:
-   | Код | Последняя строка | Действие |
+2. In the FOREGROUND, from `<root>`, with `$ARGUMENTS` unchanged: `python ${CLAUDE_PLUGIN_ROOT}/scripts/prepare_run.py $ARGUMENTS --repo <root>`. Quote idea text that contains spaces.
+3. Exit code, by the last line of output:
+   | Code | Last line | Action |
    |---|---|---|
-   | 0 | `PREPARE: ready <path>` | показать путь и сводку из шапки `queue.yaml` (единиц, low/high, покрытие требований, вопросы); предложить `/powerpuff:queue <path>` |
-   | 1 | `PREPARE: failed (<причина>)` | показать причину и список проблем (ошибки линтера, красные гейты, проблемы черновика); править спеку или флаги, не обходить |
-   | 3 | `PREPARE: rate limited` | сообщить; повтор той же команды продолжит с места |
-   | 4 | `PREPARE: needs answers <questions.json>` | шаг 4 |
-4. Код 4: показать человеку таблицу блокирующих вопросов (вопрос, решение по умолчанию, цена ошибки), собрать ответы, записать каждый в поле `"answer"` соответствующего `Q` в `<root>/<questions.json>` и повторить ту же команду. Аудит заново не запускается; ответы уходят нарезке как обязательные решения. «Принять по умолчанию» = `--assume-defaults`.
-5. `--accept-lint` использовать только по явному решению человека; принятые находки попадают в шапку `queue.yaml`.
+   | 0 | `PREPARE: ready <path>` | show the path and the summary from the `queue.yaml` header (units, low/high, requirement coverage, questions); suggest `/powerpuff:queue <path>` |
+   | 1 | `PREPARE: failed (<reason>)` | show the reason and the list of problems (linter errors, red gates, draft problems); fix the spec or flags, do not work around |
+   | 3 | `PREPARE: rate limited` | report it; repeating the same command resumes where it left off |
+   | 4 | `PREPARE: needs answers <questions.json>` | step 4 |
+4. Code 4: show the human a table of blocking questions (question, default decision, cost of wrong guess), collect the answers, write each into the `"answer"` field of the matching `Q` in `<root>/<questions.json>` and repeat the same command. The audit is not re-run; the answers go to slicing as mandatory decisions. "Accept default" = `--assume-defaults`.
+5. Use `--accept-lint` only on an explicit human decision; accepted findings go into the `queue.yaml` header.
 
-Стадии (состояние `<root>/.powerpuff/prepare/<slug>/state.json`, повтор продолжает с места):
-| Стадия | Кто | Результат |
+Stages (state in `<root>/.powerpuff/prepare/<slug>/state.json`, a repeat resumes where it left off):
+| Stage | Who | Result |
 |---|---|---|
-| `lint` | скрипт | `spec_lint`; ошибки -> выход 1, `lint.json` |
-| `base` | скрипт | гейты `powerpuff.yaml` на нетронутой базе; красная -> выход 1 без затрат |
-| `questions` | `--model`, только чтение | `questions.json` (Q-строки), `decisions.md` (D-строки) |
-| `slice` | `--model`, только чтение | `units.yaml`; проверка скриптом, до 2 раундов исправления |
-| `emit` | скрипт | `--out`, проверка валидатором `queue_run.py --dry-run` |
+| `lint` | script | `spec_lint`; errors -> exit 1, `lint.json` |
+| `base` | script | `powerpuff.yaml` gates on the untouched base; a red one -> exit 1 at no cost |
+| `questions` | `--model`, read-only | `questions.json` (Q lines), `decisions.md` (D lines) |
+| `slice` | `--model`, read-only | `units.yaml`; checked by the script, up to 2 fix rounds |
+| `emit` | script | `--out`, validated by `queue_run.py --dry-run` |

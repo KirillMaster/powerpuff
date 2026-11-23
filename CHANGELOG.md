@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.1
+English translation of docs, prompts and messages.
+
 ## 0.3.0
 Cost/speed refactor after a 12-hour overnight run (64 units, 81 runs, ~$544 notional; see docs/HANDOFF-2026-11-22-cost-refactor.md).
 - Unit prompts carry a slice of the shared spec (`scripts/spec_slice.py`) instead of the whole spec: yamlkit items named by the unit's `requirements`/text, their tasks, contracts and entities; markdown paragraphs with those ids; paths for the rest. 211K -> ~14K characters per unit on the reference project; the coverage check now asks only for the unit's own ids.

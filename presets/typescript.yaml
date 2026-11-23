@@ -1,7 +1,7 @@
-# Пресет TypeScript. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
-# {pm} / {pmx} подставляет profile_init по lock-файлу: npm | pnpm | yarn; {pmx} без сети (npx --no-install, pnpm exec, yarn).
-# Инструменты (devDependencies проекта): typescript, eslint, prettier, vitest или jest или c8, dependency-cruiser,
-# @stryker-mutator/core, jscpd; глобально - lizard (необязательно).
+# TypeScript preset. Reads scripts/profile_init.py; format and `needs` conditions are in docs/profile.md.
+# {pm} / {pmx} are substituted by profile_init from the lock file: npm | pnpm | yarn; {pmx} runs offline (npx --no-install, pnpm exec, yarn).
+# Tools (project devDependencies): typescript, eslint, prettier, vitest or jest or c8, dependency-cruiser,
+# @stryker-mutator/core, jscpd; global - lizard (optional).
 stack: typescript
 detect: ["tsconfig.json", "package.json~typescript"]
 gates:

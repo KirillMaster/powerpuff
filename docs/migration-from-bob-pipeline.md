@@ -1,59 +1,59 @@
-# Переход с bob-pipeline
+# Migrating from bob-pipeline
 
-Основание выбора, что взято и что нет, — `docs/from-bob-pipeline.md`; здесь соответствия и порядок действий. Переход выполнен 2026-11-20 на личных и рабочих репозиториях (профили `powerpuff.yaml` по этому руководству); реальный прогон `/powerpuff:forge` на каждом из них — следующий шаг (критерий 8.2).
+The rationale for what was kept and what was not is in `docs/from-bob-pipeline.md`; this page gives the mapping and the order of steps. The migration was done on 2026-11-20 on personal and work repositories (`powerpuff.yaml` profiles written per this guide); a real `/powerpuff:forge` run on each of them is the next step (criterion 8.2).
 
-## Соответствие понятий
-| bob-pipeline | powerpuff | Замечание |
+## Concept mapping
+| bob-pipeline | powerpuff | Note |
 |---|---|---|
-| `/bob-run <фича>` | `/powerpuff:forge <спека>` для одной спеки, `/powerpuff:queue queue.yaml` для нескольких единиц | оркестратор — скрипт, а не модель |
-| Слайс | единица в `queue.yaml` (`id`, `deps`, `risk`, `requirements`, `files`, `spec`) | цель — дифф до ~200 строк; нарезку проверяет скрипт |
-| Specifier (Gherkin, QA-процедуры, слайсы) | спека yamlkit (`spec.yaml`, id `AS-n`/`AC-n`/`FR-n`) + `/powerpuff:prepare`: `spec_lint.py` → вопросы → нарезка → `queue.yaml` | Gherkin как обязательный слой не переносится |
-| Scout | не нужен: одна сессия сама читает репозиторий | |
-| Coder | движок `plain` (по умолчанию): одна сессия Opus — вопросы и приёмочные тесты по каждому id спеки, заморозка, затем код в той же сессии; гейты гоняет скрипт | `docs/engine-plain.md` |
-| QA | гейты профиля + скрытая от модели проверка замороженных тестов; приёмка свежим контекстом — опция `--accept` | по замеру приёмка качества не добавила |
-| Architect, Hardener | не переносятся | см. ниже |
-| `.claude/bob-pipeline.yaml` | `powerpuff.yaml` в корне репозитория | другой формат, см. шаг 2 |
-| Гейты E/G (формат, линтер, архитектура, тесты) | `gates.iteration` и `gates.unit` + `commands` профиля; решает код выхода команды | отсутствующий инструмент = провал |
-| Запрет трогать тесты и ослаблять гейты | замороженные хэши + `gate_guard.py` + откат правок `powerpuff.yaml` во время прогона | плюс `hook_protect.py` в сессиях с человеком |
-| Гейты по диффу (сложность, дубли) | `diff_gates.py`: `coverage`, `duplication`, `complexity`, `size` | команды профиля с кодом выхода 0/1/3 |
-| K2 (красный тест на чистой базе) | проверка «приёмочные тесты падают до реализации» в `forge_run.py` | |
-| K3, K4, `ci_gates.py` | не перенесены | кандидаты: по одному и только с замером пользы |
-| Worktree на слайс (`.worktrees/bob-*`) | worktree на единицу `.powerpuff/runs/<run_id>/wt/<id>`, ветка `powerpuff/<run_id>/<id>` | слияние низкого риска — в интеграционную ветку без касания рабочей копии |
-| Продолжение после сбоя, ожидание лимита, бюджет | то же: повторный запуск продолжает; `--max-usd`, `--max-hours`, треть бюджета в резерве на исправления | |
-| Отчёт прогона (`run-report.md`) | `.forge/REPORT.md` на единицу, `SUMMARY.md` и `summary.json` на очередь, `cards.html` для аудита | |
-| Режимы без человека и с человеком | автономный прогон и режим с человеком (`--attended`, хуки) | к часам суток не привязано |
+| `/bob-run <feature>` | `/powerpuff:forge <spec>` for a single spec, `/powerpuff:queue queue.yaml` for several units | the orchestrator is a script, not a model |
+| Slice | unit in `queue.yaml` (`id`, `deps`, `risk`, `requirements`, `files`, `spec`) | target: a diff of up to ~200 lines; slicing is checked by a script |
+| Specifier (Gherkin, QA procedures, slices) | yamlkit spec (`spec.yaml`, ids `AS-n`/`AC-n`/`FR-n`) + `/powerpuff:prepare`: `spec_lint.py` → questions → slicing → `queue.yaml` | Gherkin as a mandatory layer is not carried over |
+| Scout | not needed: a single session reads the repository itself | |
+| Coder | `plain` engine (default): one Opus session — questions and acceptance tests for every spec id, freeze, then code in the same session; the script runs the gates | `docs/engine-plain.md` |
+| QA | profile gates + a check of the frozen tests hidden from the model; fresh-context acceptance is the `--accept` option | by measurement, acceptance added no quality |
+| Architect, Hardener | not carried over | see below |
+| `.claude/bob-pipeline.yaml` | `powerpuff.yaml` at the repository root | different format, see step 2 |
+| Gates E/G (format, linter, architecture, tests) | `gates.iteration` and `gates.unit` + profile `commands`; the command's exit code decides | a missing tool = failure |
+| Ban on touching tests and weakening gates | frozen hashes + `gate_guard.py` + rollback of `powerpuff.yaml` edits during a run | plus `hook_protect.py` in sessions with a human |
+| Diff gates (complexity, duplicates) | `diff_gates.py`: `coverage`, `duplication`, `complexity`, `size` | profile commands with exit code 0/1/3 |
+| K2 (red test on a clean base) | the check "acceptance tests fail before implementation" in `forge_run.py` | |
+| K3, K4, `ci_gates.py` | not carried over | candidates: one at a time and only with a measured benefit |
+| Worktree per slice (`.worktrees/bob-*`) | worktree per unit `.powerpuff/runs/<run_id>/wt/<id>`, branch `powerpuff/<run_id>/<id>` | low-risk merge goes into the integration branch without touching the working copy |
+| Resuming after a failure, waiting out the limit, budget | same: a re-run resumes; `--max-usd`, `--max-hours`, a third of the budget reserved for fixes | |
+| Run report (`run-report.md`) | `.forge/REPORT.md` per unit, `SUMMARY.md` and `summary.json` per queue, `cards.html` for the audit | |
+| Modes without a human and with a human | autonomous run and attended mode (`--attended`, hooks) | not tied to the time of day |
 
-## Перенос проекта по шагам
-| № | Действие | Проверка |
+## Migrating a project step by step
+| No. | Action | Check |
 |---|---|---|
-| 1 | Установить плагин (`docs/quickstart.md`) | `/powerpuff:forge` доступна |
-| 2 | Написать `powerpuff.yaml` (черновик: `python <плагин>/scripts/profile_init.py`) из команд, которые bob-pipeline запускал как гейты; ключ `setup` — установка зависимостей; ярус `iteration` — быстрые (сборка, формат, линтер, быстрые тесты), `unit` — медленные (покрытие диффа, архитектура) | на чистой базе все команды выходят с 0 |
-| 3 | Перенести список защищённых файлов в `protected` (конфиги линтера и анализаторов, сам `powerpuff.yaml`); оправданные подавления — в `allow_suppressions` | `gate_guard.py --base <sha>` без нарушений на текущем дереве |
-| 4 | Поставить `approved: true` | в `REPORT.md` строка `gates: approved profile` |
-| 5 | Спеку в формате yamlkit (`spec.yaml`/`tasks.yaml`) оставить как есть; Gherkin и QA-процедуры для powerpuff не нужны | `spec_lint.py <каталог спеки>` выходит с 0 или список правок понятен |
-| 6 | Прогнать одну небольшую фичу: `/powerpuff:forge <спека>` | `FORGE: done`, свои тесты и линтер на результате |
-| 7 | Для набора независимых этапов: `/powerpuff:prepare <спека>` → `queue.yaml`, `/powerpuff:queue queue.yaml --dry-run`, затем прогон | `PREPARE: ready`, `QUEUE: dry-run ok` |
-| 8 | Вместо чтения отчётов ролей — аудит: `audit_cards.py`, `answers.yaml`, `audit_apply.py` | `next-queue.yaml` принимает `queue_run.py --dry-run` |
-| 9 | Включить хуки для работы с человеком: секция `hooks:` в профиле (`stop_gates`, `protect`) | `docs/attended-mode.md` |
+| 1 | Install the plugin (`docs/quickstart.md`) | `/powerpuff:forge` is available |
+| 2 | Write `powerpuff.yaml` (draft: `python <plugin>/scripts/profile_init.py`) from the commands bob-pipeline ran as gates; key `setup` — dependency installation; tier `iteration` — fast ones (build, format, linter, quick tests), `unit` — slow ones (diff coverage, architecture) | on a clean base all commands exit with 0 |
+| 3 | Move the list of protected files to `protected` (linter and analyzer configs, `powerpuff.yaml` itself); justified suppressions go to `allow_suppressions` | `gate_guard.py --base <sha>` reports no violations on the current tree |
+| 4 | Set `approved: true` | `REPORT.md` contains the line `gates: approved profile` |
+| 5 | Leave the yamlkit-format spec (`spec.yaml`/`tasks.yaml`) as is; Gherkin and QA procedures are not needed for powerpuff | `spec_lint.py <spec directory>` exits with 0 or the list of fixes is clear |
+| 6 | Run one small feature: `/powerpuff:forge <spec>` | `FORGE: done`, your own tests and linter pass on the result |
+| 7 | For a set of independent stages: `/powerpuff:prepare <spec>` → `queue.yaml`, `/powerpuff:queue queue.yaml --dry-run`, then the run | `PREPARE: ready`, `QUEUE: dry-run ok` |
+| 8 | Instead of reading role reports — the audit: `audit_cards.py`, `answers.yaml`, `audit_apply.py` | `queue_run.py --dry-run` accepts `next-queue.yaml` |
+| 9 | Enable hooks for work with a human: the `hooks:` section in the profile (`stop_gates`, `protect`) | `docs/attended-mode.md` |
 
-Состояние bob-pipeline (`.bob/`, `.claude/agents/bob/`, `.worktrees/bob-*`) powerpuff не читает и не меняет. Незавершённые слайсы bob-pipeline заканчивайте или сбрасывайте самим bob-pipeline до перехода.
+powerpuff neither reads nor changes bob-pipeline state (`.bob/`, `.claude/agents/bob/`, `.worktrees/bob-*`). Finish or reset unfinished bob-pipeline slices with bob-pipeline itself before migrating.
 
-## Что намеренно не перенесено
-| Что | Почему |
+## What was intentionally not carried over
+| What | Why |
 |---|---|
-| Пять ролей на каждый слайс | на пилоте бенча качество 0.70–0.78 против 0.94–1.0 у обычного Claude Code при цене в 5–20 раз выше (`docs/FINDINGS.md`, A1, A3) |
-| Gherkin и QA-процедуры как обязательный слой | дублируют спеку, пользы в замере не показали |
-| Модель-оркестратор | на реальной спеке стоил $11.42; оркестратор-скрипт с одним писателем — $8.09 (A4, A5) |
-| Мутационное тестирование в цикле | данных о пользе в агентном цикле нет, дорого; мутации на диффе — только как гейт `final` |
-| Метрики прогона в прежнем виде | упрощены до стоимости по моделям и этапам в `state.json` |
-| Гейты K3, K4, `ci_gates.py` | отдельно не измерялись; переносятся по одному с замером |
+| Five roles on every slice | on the benchmark pilot quality was 0.70–0.78 vs 0.94–1.0 for plain Claude Code at 5–20 times the cost (`docs/FINDINGS.md`, A1, A3) |
+| Gherkin and QA procedures as a mandatory layer | duplicate the spec, showed no benefit in measurement |
+| Orchestrator model | on a real spec cost $11.42; a script orchestrator with a single writer — $8.09 (A4, A5) |
+| Mutation testing in the loop | no data on benefit in an agent loop, expensive; mutations on the diff — only as the `final` gate |
+| Run metrics in their old form | simplified to cost by model and stage in `state.json` |
+| Gates K3, K4, `ci_gates.py` | not measured separately; ported one at a time with measurement |
 
-Сравнение на общем наборе задач: `docs/EFFICIENCY.md` и `docs/FINDINGS.md` A22–A23 — ролевой конвейер хуже обычного Claude Code (Δ −0.28), powerpuff `plain` не хуже его ни на одной задаче при цене ×2.2.
+Comparison on a shared task set: `docs/EFFICIENCY.md` and `docs/FINDINGS.md` A22–A23 — the role-based pipeline is worse than plain Claude Code (Δ −0.28), powerpuff `plain` is no worse than it on any task at ×2.2 the cost.
 
-## Сосуществование
-| Вопрос | Ответ |
+## Coexistence
+| Question | Answer |
 |---|---|
-| Можно ли поставить оба плагина | да; команды в разных пространствах имён (`/bob-run`, `/powerpuff:*`), состояние в разных каталогах (`.bob/`, `.worktrees/bob-*` против `.powerpuff/`, `.forge/`) |
-| Хуки powerpuff | opt-in: без `powerpuff.yaml` или без секции `hooks:` хук выходит с 0 и ничего не делает |
-| Конфиг bob-pipeline | `forge_run.py` не читает `.claude/bob-pipeline.yaml`; он лишь указан в промпте аудита как подсказка модели для черновика гейтов, когда `powerpuff.yaml` нет. Утверждённый профиль подсказку отключает |
-| Один репозиторий, оба конвейера | не запускайте одновременно в одной рабочей копии; каталоги `.powerpuff/`, `.forge/` и `.forge-unit-spec.md` добавляются в `.git/info/exclude` |
+| Can both plugins be installed | yes; commands live in different namespaces (`/bob-run`, `/powerpuff:*`), state in different directories (`.bob/`, `.worktrees/bob-*` vs `.powerpuff/`, `.forge/`) |
+| powerpuff hooks | opt-in: without `powerpuff.yaml` or without a `hooks:` section the hook exits with 0 and does nothing |
+| bob-pipeline config | `forge_run.py` does not read `.claude/bob-pipeline.yaml`; it is only mentioned in the audit prompt as a hint for the model when drafting gates if `powerpuff.yaml` is absent. An approved profile disables the hint |
+| One repository, both pipelines | do not run them simultaneously in one working copy; the directories `.powerpuff/`, `.forge/` and `.forge-unit-spec.md` are added to `.git/info/exclude` |
