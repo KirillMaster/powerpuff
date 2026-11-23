@@ -1,6 +1,6 @@
-# Пресет .NET. Читает scripts/profile_init.py; формат и условия `needs` - docs/profile.md.
-# Инструменты: dotnet SDK (обязателен); coverlet.collector в тестовом проекте (покрытие); lizard (сложность);
-# KirillMaster.QualityGates.Cli (`dotnet tool install -g KirillMaster.QualityGates.Cli`, команда `qg`) - необязательный финальный гейт.
+# .NET preset. Reads scripts/profile_init.py; format and `needs` conditions are in docs/profile.md.
+# Tools: dotnet SDK (required); coverlet.collector in the test project (coverage); lizard (complexity);
+# KirillMaster.QualityGates.Cli (`dotnet tool install -g KirillMaster.QualityGates.Cli`, command `qg`) - optional final gate.
 stack: dotnet
 detect: ["*.sln", "*.slnx", "*.csproj"]
 gates:

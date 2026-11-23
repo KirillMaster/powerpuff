@@ -1,134 +1,134 @@
-# План разработки powerpuff и шкала прогресса
+# powerpuff development plan and progress scale
 
-Правила плана:
-- Этап закрыт, только когда выполнены **все** его критерии; каждый критерий проверяется командой или артефактом, а не мнением.
-- Компонент остаётся, только если его польза видна в замере (бенч или пилот). Иначе убирается.
-- Находки и основания — `docs/FINDINGS.md`. Термины: подготовка спеки → автономный режим → аудит.
+Plan rules:
+- A stage is closed only when **all** its criteria are met; each criterion is verified by a command or an artifact, not by opinion.
+- A component stays only if its value shows up in a measurement (bench or pilot). Otherwise it is removed.
+- Findings and rationale are in `docs/FINDINGS.md`. Terms: spec preparation → autonomous mode → audit.
 
-## Где мы сейчас
-Обновляется при каждом закрытом критерии. Прогресс = закрытые критерии / все критерии.
+## Where we are now
+Updated whenever a criterion is closed. Progress = closed criteria / all criteria.
 
-| Этап | Название | Критериев закрыто | Статус |
+| Stage | Name | Criteria closed | Status |
 |---|---|---|---|
-| 0 | Основание | 4 / 4 | готово |
-| 1 | Автономный прогон одной спеки (forge) | 5 / 5 | готово; итог — упрощённое ядро (A22) |
-| 2 | Гейты: решает скрипт | 5 / 9 | в работе |
-| 3 | Подготовка спеки | 2 / 5 | в работе |
-| 4 | Очередь единиц работы | 1 / 6 | в работе |
-| 5 | Аудит результатов | 1 / 6 | в работе |
-| 6 | Режим с присутствием | 3 / 3 | готово (тестами) |
-| 7 | Пилоты на двух типах систем | 0 / 5 | не начат |
-| 8 | Выпуск 1.0 | 1 / 5 | в работе |
-| | **Всего** | **22 / 48 (46%)** | |
+| 0 | Foundation | 4 / 4 | done |
+| 1 | Autonomous run of a single spec (forge) | 5 / 5 | done; outcome is a simplified core (A22) |
+| 2 | Gates: the script decides | 5 / 9 | in progress |
+| 3 | Spec preparation | 2 / 5 | in progress |
+| 4 | Work-unit queue | 1 / 6 | in progress |
+| 5 | Results audit | 1 / 6 | in progress |
+| 6 | Attended mode | 3 / 3 | done (by tests) |
+| 7 | Pilots on two types of systems | 0 / 5 | not started |
+| 8 | Release 1.0 | 1 / 5 | in progress |
+| | **Total** | **22 / 48 (46%)** | |
 
-Точка решения после этапа 1: если forge не лучше plain по качеству и не дешевле при равном качестве, ядро упрощается до «plain + аудит неоднозначностей + замороженные тесты», а этапы 2–8 строятся вокруг него без изменений.
+Decision point after stage 1: if forge is no better than plain in quality and no cheaper at equal quality, the core is simplified to "plain + ambiguity audit + frozen tests", and stages 2–8 are built around it unchanged.
 
-## Этап 0. Основание — готово
-| № | Критерий | Проверка |
+## Stage 0. Foundation — done
+| # | Criterion | Verification |
 |---|---|---|
-| 0.1 | Обзор приёмов с источниками | `docs/research/*.md` |
-| 0.2 | Дизайн с вариантами и выбором | `docs/design-forge.md`, `docs/design-system.md` |
-| 0.3 | Обзор готовых решений, вывод «строить / брать» | `docs/research/ready-made-plugins.md` |
-| 0.4 | Отдельный репозиторий плагина | github.com/KirillMaster/powerpuff |
+| 0.1 | Survey of techniques with sources | `docs/research/*.md` |
+| 0.2 | Design with options and a choice | `docs/design-forge.md`, `docs/design-system.md` |
+| 0.3 | Survey of ready-made solutions, "build / adopt" conclusion | `docs/research/ready-made-plugins.md` |
+| 0.4 | Separate plugin repository | github.com/KirillMaster/powerpuff |
 
-## Этап 1. Автономный прогон одной спеки (forge)
-Цель: одна спека → готовый код без человека; «готово» печатает скрипт.
-| № | Критерий | Проверка | Статус |
+## Stage 1. Autonomous run of a single spec (forge)
+Goal: one spec → working code without a human; "done" is printed by the script.
+| # | Criterion | Verification | Status |
 |---|---|---|---|
-| 1.1 | Реальная спека пройдена от начала до конца без вмешательства, результат перепроверен независимо | `FORGE: done`, свой прогон тестов и линтера | закрыт: v2, 2026-11-17, `FORGE: done`, $8.09, 220 тестов и линтер перепроверены; одна остановка была из-за ошибки драйвера (исправлена), повтор без вмешательства — на бенче |
-| 1.2 | Продолжение после обрыва и после лимита подписки, накопительный бюджет | тест: убить процесс на каждом шаге → повторный запуск доходит до конца; подставной ответ «лимит» → ожидание и продолжение | закрыт 2026-11-17: `tests/test_forge_run.py`, 41 тест с подставным `claude` (обрыв на каждом шаге, лимит подписки, бюджеты, все переходы); найдены и исправлены 3 ошибки драйвера |
-| 1.3 | Модульные тесты драйвера с подставным `claude` | `pytest tests/` зелёный, покрыты все переходы состояний | закрыт 2026-11-17 тем же набором тестов, что и 1.2 (`tests/test_forge_run.py`, см. строку 1.2) |
-| 1.4 | Отчёт бенча: plain, lite, bob, forge, forge-opus на общем наборе задач; качество, цена по моделям, вписывание в лимиты подписки | `protocol_verdict.py` по двум прогонам, однозначный вердикт | закрыт 2026-11-18: forge равен plain по качеству при цене ×3–4 (×8 на цепочке), ролевой конвейер хуже (FINDINGS A22) |
-| 1.5 | Решение по ядру записано: forge как есть / упрощённое ядро; режим по умолчанию одной строкой | запись в `docs/FINDINGS.md` и README | закрыт 2026-11-18: упрощённое ядро; строка режима по умолчанию — README |
+| 1.1 | A real spec is run end to end without intervention, result re-verified independently | `FORGE: done`, own run of tests and linter | closed: v2, 2026-11-17, `FORGE: done`, $8.09, 220 tests and linter re-verified; one stop was caused by a driver bug (fixed), a repeat without intervention is on the bench |
+| 1.2 | Resume after an interruption and after a subscription limit, cumulative budget | test: kill the process at every step → rerun reaches the end; fake "limit" response → wait and continue | closed 2026-11-17: `tests/test_forge_run.py`, 41 tests with a fake `claude` (interruption at every step, subscription limit, budgets, all transitions); 3 driver bugs found and fixed |
+| 1.3 | Driver unit tests with a fake `claude` | `pytest tests/` green, all state transitions covered | closed 2026-11-17 by the same test suite as 1.2 (`tests/test_forge_run.py`, see row 1.2) |
+| 1.4 | Bench report: plain, lite, bob, forge, forge-opus on a shared task set; quality, cost by model, fit within subscription limits | `protocol_verdict.py` over two runs, unambiguous verdict | closed 2026-11-18: forge equals plain in quality at ×3–4 the cost (×8 on a chain), the role-based pipeline is worse (FINDINGS A22) |
+| 1.5 | Core decision recorded: forge as is / simplified core; default mode in one line | entry in `docs/FINDINGS.md` and README | closed 2026-11-18: simplified core; the default-mode line is in the README |
 
-## Этап 2. Гейты: решает скрипт
-Цель: ни одно утверждение модели не влияет на вердикт. Дизайн — `docs/design-gates.md`.
-| № | Критерий | Проверка |
+## Stage 2. Gates: the script decides
+Goal: no model claim affects the verdict. Design — `docs/design-gates.md`.
+| # | Criterion | Verification |
 |---|---|---|
-| 2.1 | Профиль `powerpuff.yaml` в репозитории проекта; гейты запускает драйвер; неутверждённый профиль помечается в отчёте | forge не читает гейты, выбранные моделью, без пометки |
-| 2.2 | Нет инструмента или отчёта — гейт провален | тест с отсутствующим инструментом |
-| | ↳ 2.1 и 2.2 закрыты 2026-11-17 | профиль `powerpuff.yaml` (уровни итерация / единица / финал), черновик и пометка «гейты не утверждены» без профиля, отсутствующий инструмент = провал, защита от обхода в проверке «готово», драйвер не доверяет `.forge/gates.json` и профилю, изменённым во время прогона; `tests/test_forge_profile.py`, весь набор — 109 тестов |
-| 2.3 | `gate_guard`: пропуск тестов, подавление предупреждений, правка защищённых файлов, уменьшение числа тестов | тесты на ≥8 подсаженных обходов, все пойманы; 0 ложных срабатываний на 3 реальных диффах |
-| | ↳ 2.3 закрыт 2026-11-17 | `scripts/gate_guard.py`, 43 теста зелёные; языки: C#, MSBuild, JS/TS, Python, Rust, Go, Java/Kotlin, свои — через профиль. На трёх реальных диффах ложных срабатываний нет: чистый дифф forge v2 — 0 нарушений; дифф forge v1 — 2 настоящих `@ts-expect-error` в тестах; большой дифф со сторонними подпроектами — настоящие `# noqa` и новые конфиги в подпапках. Подключение к драйверу — критерий 2.1 |
-| 2.4 | Единый `quality-report.json`; ядро без знания стеков; пресеты профиля для .NET (через `qg`), TypeScript, Python, Rust, Go | по одному реальному репозиторию минимум трёх разных стеков, один из них без пресета (профиль написан вручную): отчёт получен драйвером |
-| | ↳ 2.4 закрыт 2026-11-17 | пресеты `presets/*.yaml` (.NET, TypeScript, Python, Rust, Go), `scripts/profile_init.py` (черновик профиля по маркерам, `approved: false`), `scripts/quality_report.py` (единый `quality-report.json` со временем каждого гейта). Проверено на трёх реальных репозиториях: .NET, Python и Kotlin/Gradle без пресета (профиль вручную) — таблица в `docs/profile.md`, находка A20. Не проверено: пресеты Rust и Go (нет инструментов на машине), уровень `final` |
-| 2.5 | Гейты единицы: покрытие диффа, сложность и дубли по изменённым файлам, «приёмочный тест падает на старом коде» | тесты на подсаженные нарушения |
-| | ↳ 2.5 закрыт 2026-11-17 | `scripts/diff_gates.py`: покрытие изменённых строк (cobertura, lcov, Go, coverage.py, JaCoCo), новые дубли, сложность затронутых функций (lizard, eslint, radon, gocyclo, SARIF), размер диффа; нет отчёта = код 3; 62 теста на подсаженные нарушения; «приёмочные тесты падают до реализации» — `tests/test_forge_red.py`. Базовый коммит подставляется драйвером (`{base}`) |
-| 2.6 | Замер: время каждого гейта и что он поймал на бенче | таблица в `docs/FINDINGS.md`; гейты без пойманных дефектов переведены в необязательные |
-| 2.7 | Гейт подделки тестов (скрипт, без модели): тест без проверок, проверка-тавтология, мок проверяемого кода, тест не падает при откате реализации, ослабленные ассерты в изменённых тестах | тесты на подсаженные подделки; на бенче — сколько поймал и ложных срабатываний |
-| 2.8 | Мутанты по диффу и CRAP (сложность × непокрытость) изменённых функций — уровень `final`, необязательный | замер на бенче: время и пойманное; остаётся, только если ловит то, что пропустили гейты |
-| 2.9 | «Готово» только с доказательством: в отчёте SHA коммита, команды гейтов с кодами и хвостами, хэши замороженных тестов | `quality-report.json` по схеме; без полей — `FORGE: failed` |
+| 2.1 | `powerpuff.yaml` profile in the project repository; the driver runs the gates; an unapproved profile is flagged in the report | forge does not read model-chosen gates without a flag |
+| 2.2 | Missing tool or report — gate failed | test with a missing tool |
+| | ↳ 2.1 and 2.2 closed 2026-11-17 | `powerpuff.yaml` profile (iteration / unit / final levels), draft and a "gates not approved" flag when there is no profile, missing tool = failure, bypass protection in the "done" check, the driver does not trust `.forge/gates.json` and the profile if they changed during the run; `tests/test_forge_profile.py`, whole suite — 109 tests |
+| 2.3 | `gate_guard`: skipped tests, suppressed warnings, edits to protected files, reduced test count | tests for ≥8 planted bypasses, all caught; 0 false positives on 3 real diffs |
+| | ↳ 2.3 closed 2026-11-17 | `scripts/gate_guard.py`, 43 tests green; languages: C#, MSBuild, JS/TS, Python, Rust, Go, Java/Kotlin, custom ones via the profile. No false positives on three real diffs: the clean forge v2 diff — 0 violations; the forge v1 diff — 2 genuine `@ts-expect-error` in tests; a large diff with third-party subprojects — genuine `# noqa` and new configs in subfolders. Wiring into the driver is criterion 2.1 |
+| 2.4 | Single `quality-report.json`; core with no knowledge of stacks; profile presets for .NET (via `qg`), TypeScript, Python, Rust, Go | one real repository for at least three different stacks, one of them without a preset (profile written by hand): report obtained by the driver |
+| | ↳ 2.4 closed 2026-11-17 | `presets/*.yaml` presets (.NET, TypeScript, Python, Rust, Go), `scripts/profile_init.py` (draft profile from markers, `approved: false`), `scripts/quality_report.py` (single `quality-report.json` with the time of each gate). Verified on three real repositories: .NET, Python and Kotlin/Gradle without a preset (profile by hand) — table in `docs/profile.md`, finding A20. Not verified: Rust and Go presets (no tools on the machine), the `final` level |
+| 2.5 | Unit gates: diff coverage, complexity and duplicates on changed files, "acceptance test fails on old code" | tests for planted violations |
+| | ↳ 2.5 closed 2026-11-17 | `scripts/diff_gates.py`: changed-line coverage (cobertura, lcov, Go, coverage.py, JaCoCo), new duplicates, complexity of touched functions (lizard, eslint, radon, gocyclo, SARIF), diff size; no report = exit code 3; 62 tests for planted violations; "acceptance tests fail before implementation" — `tests/test_forge_red.py`. The base commit is substituted by the driver (`{base}`) |
+| 2.6 | Measurement: time of each gate and what it caught on the bench | table in `docs/FINDINGS.md`; gates that caught no defects are made optional |
+| 2.7 | Test-forgery gate (script, no model): test without assertions, tautological assertion, mock of the code under test, test does not fail when the implementation is reverted, weakened assertions in changed tests | tests for planted forgeries; on the bench — how many it caught and false positives |
+| 2.8 | Diff mutants and CRAP (complexity × uncovered share) of changed functions — `final` level, optional | bench measurement: time and what it caught; stays only if it catches what the gates missed |
+| 2.9 | "Done" only with proof: the report contains the commit SHA, gate commands with exit codes and output tails, hashes of frozen tests | `quality-report.json` matches the schema; missing fields — `FORGE: failed` |
 
-## Этап 3. Подготовка спеки
-Цель: в автономный режим уходит спека, по которой не нужно угадывать.
-| № | Критерий | Проверка |
+## Stage 3. Spec preparation
+Goal: only a spec that requires no guessing goes into autonomous mode.
+| # | Criterion | Verification |
 |---|---|---|
-| 3.1 | `spec_lint`: критерий без теста, история без нефункциональных требований, несуществующий путь, слишком длинный список задач, отложенный пункт без владельца | тесты на 5 подсаженных дефектов |
-| | ↳ 3.1 закрыт 2026-11-17 | `scripts/spec_lint.py`, 30 тестов на подсаженные дефекты (критерий без теста, история без нефункциональных требований, несуществующий путь, длинный список задач, отложенный пункт без владельца, неразрешённое уточнение, висячая ссылка, требование без задачи); на двух реальных спеках не падает, обе получают отказ: в одной список задач 1208 строк, в другой история, меняющая состояние, без нефункциональных критериев |
-| 3.2 | Аудит неоднозначностей выдаёт вопросы в формате «блокирующий / неблокирующий / справочный» с решением по умолчанию | прогон на 2 реальных спеках; человек закрывает блокирующие за один проход |
-| | ↳ 3.2 частично | готово: аудит пишет вопросы `Q<n> [blocking|non-blocking|info]` с решением по умолчанию и ценой ошибки, драйвер разбирает их в `.forge/questions.json`; без ответа на блокирующий вопрос прогон не угадывает (или `--assume-defaults`), ответы уходят писателям как обязательные решения (`tests/test_forge_hardening.py`). Открыто: прогон на 2 реальных спеках |
-| 3.3 | Нарезка на единицы `{id, зависимости, требования, уровень риска, файлы}` с целевым диффом до ~200 строк | `queue.yaml` для реальной спеки; фактический дифф ≥80% единиц в пределе |
-| 3.4 | Проверка «как собрать и протестировать» запуском до старта | драйвер отказывается стартовать при красной базе |
-| | ↳ 3.4 закрыт 2026-11-17 | все гейты запускаются на нетронутой базе до первой сессии модели; красная база → отказ с хвостами вывода (`--allow-red-base` — осознанный обход), отсутствующий инструмент → отказ всегда; `tests/test_forge_hardening.py` |
-| 3.5 | Команда подготовки связывает шаги в один проход | от идеи до `queue.yaml` одной командой с вопросами по ходу |
-| | ↳ 3.3, 3.5 частично | `scripts/prepare_run.py` + `/powerpuff:prepare`: линтер спеки → зелёная база → вопросы (блокирующие — стоп с кодом 4 до ответа) → нарезка на единицы → `queue.yaml`; нарезку проверяет скрипт (циклы, пересечение файлов, покрытие всех требований, оценка размера ≤ предела), до двух исправлений моделью; 23 теста с подставным `claude`. Открыто: реальная спека и замер фактических диффов единиц |
+| 3.1 | `spec_lint`: criterion without a test, story without non-functional requirements, nonexistent path, task list too long, deferred item without an owner | tests for 5 planted defects |
+| | ↳ 3.1 closed 2026-11-17 | `scripts/spec_lint.py`, 30 tests for planted defects (criterion without a test, story without non-functional requirements, nonexistent path, long task list, deferred item without an owner, unresolved clarification, dangling reference, requirement without a task); does not crash on two real specs, both are rejected: one has a task list of 1208 lines, the other has a state-changing story without non-functional criteria |
+| 3.2 | Ambiguity audit produces questions in the "blocking / non-blocking / informational" format with a default decision | run on 2 real specs; a human resolves the blocking ones in a single pass |
+| | ↳ 3.2 partial | done: the audit writes questions as `Q<n> [blocking|non-blocking|info]` with a default decision and the cost of a mistake, the driver parses them into `.forge/questions.json`; without an answer to a blocking question the run does not guess (or `--assume-defaults`), answers go to the writers as mandatory decisions (`tests/test_forge_hardening.py`). Open: run on 2 real specs |
+| 3.3 | Slicing into units `{id, dependencies, requirements, risk level, files}` with a target diff of up to ~200 lines | `queue.yaml` for a real spec; actual diff within the limit for ≥80% of units |
+| 3.4 | "How to build and test" is verified by running it before start | the driver refuses to start on a red base |
+| | ↳ 3.4 closed 2026-11-17 | all gates run on the untouched base before the first model session; red base → refusal with output tails (`--allow-red-base` is a deliberate bypass), missing tool → always refusal; `tests/test_forge_hardening.py` |
+| 3.5 | The prepare command chains the steps into one pass | from idea to `queue.yaml` in one command, with questions along the way |
+| | ↳ 3.3, 3.5 partial | `scripts/prepare_run.py` + `/powerpuff:prepare`: spec linter → green base → questions (blocking ones — stop with exit code 4 until answered) → slicing into units → `queue.yaml`; the script validates the slicing (cycles, file overlap, coverage of all requirements, size estimate ≤ limit), up to two model fixes; 23 tests with a fake `claude`. Open: a real spec and measurement of actual unit diffs |
 
-## Этап 4. Очередь единиц работы
-Цель: автономный прогон любой длины, который не останавливается из-за одной неудачи.
-| № | Критерий | Проверка |
+## Stage 4. Work-unit queue
+Goal: an autonomous run of any length that does not stop because of a single failure.
+| # | Criterion | Verification |
 |---|---|---|
-| 4.1 | Драйвер идёт по `queue.yaml`: своя ветка и worktree на единицу, PR на единицу | прогон ≥5 единиц, 5 PR |
-| 4.2 | Проваленная или заблокированная единица не останавливает прогон | прогон с одной заведомо невыполнимой единицей: остальные независимые сделаны |
-| | ↳ 4.2 частично | механизм готов и покрыт тестами с подставным `claude` (`tests/test_queue_run.py`): провал единицы блокирует только зависимые, независимые сливаются; единица с блокирующим вопросом получает статус `needs-answer`. Открыто: реальный прогон (вместе с 4.1) |
-| 4.3 | Лимит подписки: ожидание сброса и продолжение; общий бюджет на прогон, треть — на исправления | подставной лимит посреди прогона |
-| | ↳ 4.3 закрыт 2026-11-17 | `scripts/queue_run.py`: подставной лимит → ожидание до сброса или выход с кодом 3 и продолжение повторным запуском; общий бюджет на прогон, треть в резерве на исправления, нехватка → `skipped-budget`; тесты в `tests/test_queue_run.py` |
-| 4.4 | Автослияние единиц низкого риска с зелёными гейтами в интеграционную ветку; высокий риск ждёт аудита | проверка на прогоне из 4.1 |
-| | ↳ 4.1, 4.4, 4.5 частично | `queue_run.py`: ветка и worktree на единицу, слияние единиц низкого риска в интеграционную ветку без касания рабочей копии, высокий риск ждёт аудита, команды финального контура на интеграционной ветке — покрыто тестами с подставным `claude`. Открыто: PR на единицу, реальный прогон ≥5 единиц, единица-исправление из провала финального контура (делает `audit_apply.py`) |
-| 4.5 | Тяжёлый контур в конце прогона на интеграционной ветке; провал → карточка и единица-исправление | профиль с тяжёлым контуром на одном репозитории |
-| 4.6 | Одна независимая приёмка на прогон, а не на единицу; сравнение цены с приёмкой на единицу | замер на прогоне из 4.1 |
+| 4.1 | The driver walks `queue.yaml`: own branch and worktree per unit, PR per unit | run of ≥5 units, 5 PRs |
+| 4.2 | A failed or blocked unit does not stop the run | run with one deliberately infeasible unit: the other independent ones are done |
+| | ↳ 4.2 partial | mechanism is ready and covered by tests with a fake `claude` (`tests/test_queue_run.py`): a unit failure blocks only its dependents, independent ones are merged; a unit with a blocking question gets the `needs-answer` status. Open: a real run (together with 4.1) |
+| 4.3 | Subscription limit: wait for the reset and continue; total run budget, a third reserved for fixes | fake limit in the middle of a run |
+| | ↳ 4.3 closed 2026-11-17 | `scripts/queue_run.py`: fake limit → wait until the reset or exit with code 3 and continue by rerunning; total run budget, a third reserved for fixes, shortage → `skipped-budget`; tests in `tests/test_queue_run.py` |
+| 4.4 | Auto-merge of low-risk units with green gates into the integration branch; high risk waits for the audit | check on the run from 4.1 |
+| | ↳ 4.1, 4.4, 4.5 partial | `queue_run.py`: branch and worktree per unit, merge of low-risk units into the integration branch without touching the working copy, high risk waits for the audit, final-loop commands on the integration branch — covered by tests with a fake `claude`. Open: PR per unit, a real run of ≥5 units, the fix unit from a final-loop failure (done by `audit_apply.py`) |
+| 4.5 | Heavy loop at the end of the run on the integration branch; failure → card and a fix unit | profile with a heavy loop on one repository |
+| 4.6 | One independent acceptance per run, not per unit; cost comparison with per-unit acceptance | measurement on the run from 4.1 |
 
-## Этап 5. Аудит результатов
-Цель: человек тратит 10–20 минут и его ответы становятся входом следующего прогона.
-| № | Критерий | Проверка |
+## Stage 5. Results audit
+Goal: a human spends 10–20 minutes and their answers become the input of the next run.
+| # | Criterion | Verification |
 |---|---|---|
-| 5.1 | `cards.html`: решения по умолчанию, открытые вопросы, единицы высокого риска с диффом, провалы с уликами, итог со стоимостью | сгенерирован из реального прогона |
-| | ↳ 5.1 частично | `scripts/audit_cards.py`: один самодостаточный `cards.html` (вопросы, единицы высокого риска с диффом, провалы с уликами, заблокированные, финальный контур, итог), враждебный текст обезврежен; 21 тест. Открыто: генерация из реального прогона, проверка в браузере |
-| 5.2 | Ответы экспортируются в `answers.yaml` | файл проходит схему |
-| | ↳ 5.2 закрыт 2026-11-17 | `answers.yaml` (формат — `docs/audit-format.md`); `scripts/audit_apply.py` проверяет его против прогона: неизвестная карточка или недопустимое решение → код 3 |
-| 5.3 | Из ответов получаются правки спеки и новые единицы | следующий прогон стартует с них без ручной правки |
-| | ↳ 5.3 частично | `audit_apply.py`: ответы пишутся в `questions.json`, слияние принятых единиц, доработки/повторы/исправления → `next-queue.yaml`, который принимает `queue_run.py --dry-run`. Открыто: реальный следующий прогон |
-| 5.4 | Аудит прогона из 5 единиц занимает ≤20 минут | замер на пилоте |
-| 5.5 | Критик на другой модели — опция `--critic` уровня `final`: находка принимается только с доказательством «файл:строка + вход → неверный результат», и скрипт подтверждает её падающим тестом; неподтверждённые отбрасываются | замер на бенче: доля подтверждённых находок и цена; в режим по умолчанию — только если plain + критик лучше plain |
-| 5.6 | Экзамен для изменений харнесса: новое правило, скилл или промпт принимается, только если малый набор бенча (plain, 5 задач, k=2) не хуже прежнего | скрипт сравнения и запись в `docs/FINDINGS.md`; хуже — откат |
+| 5.1 | `cards.html`: default decisions, open questions, high-risk units with a diff, failures with evidence, summary with cost | generated from a real run |
+| | ↳ 5.1 partial | `scripts/audit_cards.py`: one self-contained `cards.html` (questions, high-risk units with a diff, failures with evidence, blocked ones, final loop, summary), hostile text neutralized; 21 tests. Open: generation from a real run, check in a browser |
+| 5.2 | Answers are exported to `answers.yaml` | file passes the schema |
+| | ↳ 5.2 closed 2026-11-17 | `answers.yaml` (format — `docs/audit-format.md`); `scripts/audit_apply.py` validates it against the run: unknown card or invalid decision → exit code 3 |
+| 5.3 | Answers produce spec edits and new units | the next run starts from them without manual edits |
+| | ↳ 5.3 partial | `audit_apply.py`: answers are written to `questions.json`, accepted units are merged, rework/retries/fixes → `next-queue.yaml`, which `queue_run.py --dry-run` accepts. Open: a real next run |
+| 5.4 | Auditing a 5-unit run takes ≤20 minutes | measurement in the pilot |
+| 5.5 | Critic on a different model — `--critic` option at the `final` level: a finding is accepted only with proof "file:line + input → wrong result", and the script confirms it with a failing test; unconfirmed ones are discarded | bench measurement: share of confirmed findings and cost; into the default mode only if plain + critic beats plain |
+| 5.6 | Exam for harness changes: a new rule, skill or prompt is accepted only if the small bench set (plain, 5 tasks, k=2) is no worse than before | comparison script and an entry in `docs/FINDINGS.md`; worse — rollback |
 
-## Этап 6. Режим с присутствием
-| № | Критерий | Проверка |
+## Stage 6. Attended mode
+| # | Criterion | Verification |
 |---|---|---|
-| 6.1 | Та же очередь с остановкой после каждой единицы и вопросами сразу | флаг `--attended` |
-| | ↳ 6.1 закрыт 2026-11-17 | `queue_run.py --attended`: пауза после каждой единицы (код 4), повторный запуск продолжает; единица с блокирующим вопросом — `needs-answer`; тесты в `tests/test_queue_run.py` |
-| 6.2 | Хук Stop не даёт завершить ход при красных гейтах итерации | тест хука |
-| 6.3 | Хук PreToolUse блокирует правку защищённых файлов | тест хука |
-| | ↳ 6.2, 6.3 закрыты 2026-11-17 | `hooks/hooks.json`, `scripts/hook_stop.py`, `scripts/hook_protect.py`; включаются в профиле (`hooks:`), по умолчанию выключены; защита от зацикливания; 22 теста (`tests/test_hooks.py`). В живой сессии Claude Code не проверялись — пункт D в `docs/FINDINGS.md` |
+| 6.1 | The same queue with a stop after each unit and immediate questions | `--attended` flag |
+| | ↳ 6.1 closed 2026-11-17 | `queue_run.py --attended`: pause after each unit (code 4), rerunning continues; a unit with a blocking question — `needs-answer`; tests in `tests/test_queue_run.py` |
+| 6.2 | The Stop hook does not let a turn finish while iteration gates are red | hook test |
+| 6.3 | The PreToolUse hook blocks edits to protected files | hook test |
+| | ↳ 6.2, 6.3 closed 2026-11-17 | `hooks/hooks.json`, `scripts/hook_stop.py`, `scripts/hook_protect.py`; enabled in the profile (`hooks:`), off by default; loop protection; 22 tests (`tests/test_hooks.py`). Not verified in a live Claude Code session — item D in `docs/FINDINGS.md` |
 
-## Этап 7. Пилоты на двух типах систем
-Цель: доказать общность — сервер с состоянием и сервис с HTTP API.
-| № | Критерий | Проверка |
+## Stage 7. Pilots on two types of systems
+Goal: prove generality — a stateful server and a service with an HTTP API.
+| # | Criterion | Verification |
 |---|---|---|
-| 7.1 | По одному этапу реальной работы на каждом типе системы пройдено полным циклом | два цикла подготовка → прогон → аудит |
-| 7.2 | Доля переделок ниже, чем была у ролевого конвейера (20–26%) | история коммитов |
-| 7.3 | Дефекты, найденные после «зелёного», посчитаны и разобраны: каким гейтом ловится каждый | таблица в `docs/FINDINGS.md` |
-| 7.4 | Стоимость на единицу и число единиц за прогон в рамках подписки | отчёт прогона |
-| 7.5 | Два прогона подряд без ручной правки кода между ними | журнал пилота |
+| 7.1 | One stage of real work on each type of system is completed through the full cycle | two cycles: preparation → run → audit |
+| 7.2 | Rework share is lower than the role-based pipeline had (20–26%) | commit history |
+| 7.3 | Defects found after "green" are counted and analyzed: which gate catches each one | table in `docs/FINDINGS.md` |
+| 7.4 | Cost per unit and number of units per run within the subscription | run report |
+| 7.5 | Two runs in a row without manual code edits between them | pilot log |
 
-## Этап 8. Выпуск 1.0
-| № | Критерий | Проверка |
+## Stage 8. Release 1.0
+| # | Criterion | Verification |
 |---|---|---|
-| 8.1 | Установка плагина и первый прогон по README за ≤15 минут на чистом репозитории | проверка на новом клоне | проверено 2026-11-19 локально: `claude plugin marketplace add <клон>` + `install` в чистом `CLAUDE_CONFIG_DIR`, затем `/powerpuff:forge` на свежем TS-клоне без `node_modules` и профиля → `FORGE: done` за ~2 мин; закрыть после push проверкой `marketplace add KirillMaster/powerpuff` |
-| 8.2 | Руководство перехода с bob-pipeline | проверено на одном проекте |
-| 8.3 | Собственный CI плагина: тесты, линтер | зелёный на `main` |
-| | ↳ 8.3 закрыт 2026-11-17 | `.github/workflows/ci.yml`: Linux и Windows, Python 3.11 и 3.12, pytest + ruff; зелёный на `main` (коммит 34eb106, 399 тестов). Первый прогон поймал синтаксис, недопустимый в 3.11 |
-| 8.4 | Все пункты «проверить» из `docs/FINDINGS.md` закрыты или сняты | раздел D пуст |
-| 8.5 | Убрано всё, что не показало пользы в замерах | сверка с 2.6 и 7.3 |
+| 8.1 | Plugin installation and first run per the README in ≤15 minutes on a clean repository | check on a fresh clone | verified 2026-11-19 locally: `claude plugin marketplace add <clone>` + `install` in a clean `CLAUDE_CONFIG_DIR`, then `/powerpuff:forge` on a fresh TS clone without `node_modules` and a profile → `FORGE: done` in ~2 min; close after the push by checking `marketplace add KirillMaster/powerpuff` |
+| 8.2 | Migration guide from bob-pipeline | verified on one project |
+| 8.3 | The plugin's own CI: tests, linter | green on `main` |
+| | ↳ 8.3 closed 2026-11-17 | `.github/workflows/ci.yml`: Linux and Windows, Python 3.11 and 3.12, pytest + ruff; green on `main` (commit 34eb106, 399 tests). The first run caught syntax that is invalid in 3.11 |
+| 8.4 | All "to verify" items from `docs/FINDINGS.md` are closed or dropped | section D is empty |
+| 8.5 | Everything that showed no value in measurements is removed | reconciliation with 2.6 and 7.3 |
 
-## Порядок и зависимости
-`1 → 2 → 3 → 4 → 5 → 7 → 8`; этап 6 можно делать после 2 в любой момент. Этапы 2 и 3 не зависят друг от друга и могут идти параллельно.
+## Order and dependencies
+`1 → 2 → 3 → 4 → 5 → 7 → 8`; stage 6 can be done at any time after 2. Stages 2 and 3 do not depend on each other and can run in parallel.

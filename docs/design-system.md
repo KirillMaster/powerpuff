@@ -1,99 +1,99 @@
-# powerpuff — подготовка спеки, автономный прогон, аудит (дизайн системы, 2026-11-17)
+# powerpuff — spec preparation, autonomous run, audit (system design, 2026-11-17)
 
-Цель: общее решение для создания качественных программных систем любой сложности — быстро, дёшево, стабильно. Человек вкладывается в спеку и в аудит; код пишется, пока он отдыхает. Автономный прогон можно запускать в любое время, к часам суток система не привязана; есть и режим с человеком рядом. В ядре нет ничего проектного.
+Goal: a general solution for building quality software systems of any complexity — fast, cheap, stable. The human invests in the spec and the audit; the code is written while they rest. An autonomous run can start at any time, with no tie to the hour of day; there is also a mode with the human present. Nothing project-specific lives in the core.
 
-## Общее ядро и профиль проекта
-| Слой | Что в нём | Где живёт |
+## Shared core and project profile
+| Layer | What it holds | Where it lives |
 |---|---|---|
-| Ядро (одно на все проекты) | линтер спеки, аудит неоднозначностей, очередь единиц, замороженные приёмочные тесты, один писатель, `forge_check`, карточки, бюджет и продолжение | плагин |
-| Профиль проекта | команды гейтов (формат, линтер, архитектура, тесты), тяжёлый контур, нефункциональные критерии по типу системы, правило автослияния | `.forge/gates.json` и `powerpuff.yaml` в репозитории; первый черновик пишет аудит по манифестам |
+| Core (one for all projects) | spec linter, ambiguity audit, unit queue, frozen acceptance tests, single writer, `forge_check`, cards, budget and resume | plugin |
+| Project profile | gate commands (format, linter, architecture, tests), heavy contour, non-functional criteria by system type, auto-merge rule | `.forge/gates.json` and `powerpuff.yaml` in the repository; the audit writes the first draft from the manifests |
 
-Тяжёлый контур задаётся типом системы, а не проектом:
-| Тип системы | Тяжёлый контур |
+The heavy contour is set by the system type, not the project:
+| System type | Heavy contour |
 |---|---|
-| Сервис с HTTP API | контрактные тесты по OpenAPI, интеграционные с реальной БД и брокером в контейнерах, нагрузочный дымовой прогон, проверка миграций |
-| Сервер с состоянием и своим протоколом (например, игровой) | бот по реальной сети, эталонные байты пакетов, soak, fuzz, инварианты (нет дюпов, баланс) |
-| Веб-интерфейс | сквозные тесты в браузере, снимки экранов, доступность |
-| Библиотека или CLI | property-based тесты, проверка публичного API на несовместимые изменения |
+| Service with an HTTP API | OpenAPI contract tests, integration tests with a real DB and broker in containers, load smoke run, migration check |
+| Stateful server with its own protocol (e.g. a game server) | bot over a real network, reference packet bytes, soak, fuzz, invariants (no dupes, balance) |
+| Web UI | end-to-end browser tests, screenshots, accessibility |
+| Library or CLI | property-based tests, public API check for breaking changes |
 
-Сложность системы ядро берёт нарезкой: большая система — это длинная очередь мелких единиц с зависимостями, а не большой прогон.
-Источники: `docs/research/{harness-survey,multi-agent-evidence,hackathon-winner-ecc,trends-2026-async-agents}.md`, пилот bob-bench, `docs/design-forge.md` (ядро автономного исполнителя).
+The core handles system complexity by slicing: a big system is a long queue of small units with dependencies, not one big run.
+Sources: `docs/research/{harness-survey,multi-agent-evidence,hackathon-winner-ecc,trends-2026-async-agents}.md`, the bob-bench pilot, `docs/design-forge.md` (the autonomous executor core).
 
-## Наблюдения из реального проекта, сделанного ролевым конвейером
-| Наблюдение | Следствие для системы |
+## Observations from a real project built with a role-based pipeline
+| Observation | Consequence for the system |
 |---|---|
-| Около четверти работы кодера — переделки; примерно половина исправлений — механика гейтов (дубли, формат) | дешёвый автофикс механики, а не роли на каждый слайс |
-| Часть багов нашёл только живой клиент уже после зелёного QA | живой путь через реальный интерфейс — обязательный гейт |
-| Тяжёлые тесты выключены по умолчанию, нет длительного прогона, нет списка нестабильных тестов | тяжёлый контур и карантин нестабильных тестов |
-| Критериев приёмки втрое больше, чем тестов; спеки навсегда в статусе черновика; пути в задачах устарели | линтер спеки и статус, машиночитаемый |
-| Решения в автономном режиме принимал оркестратор, списка открытых вопросов нет | вопросы — при подготовке спеки, решения автономного прогона — при аудите карточками |
-| Оставшиеся этапы в основном независимы | очередь независимых единиц на автономный прогон |
+| About a quarter of the coder's work is rework; about half of the fixes are gate mechanics (duplicates, format) | cheap autofix for mechanics, not roles on every slice |
+| Some bugs were found only by a live client after green QA | a live path through the real interface is a mandatory gate |
+| Heavy tests are off by default, there is no long run, no list of flaky tests | heavy contour and quarantine for flaky tests |
+| There are three times more acceptance criteria than tests; specs stay in draft status forever; paths in tasks are stale | spec linter and a machine-readable status |
+| In autonomous mode the orchestrator made the decisions, and there is no list of open questions | questions at spec preparation, autonomous-run decisions at the card audit |
+| The remaining stages are mostly independent | a queue of independent units for the autonomous run |
 
-## Три режима
-### 1. Подготовка спеки (человек рядом, 30–90 мин)
-1. `grilling` → `yamlkit-specify/plan/tasks` (как сейчас).
-2. **`spec_lint.py`** (скрипт, детерминированно). Отказ, если:
-   - у AS нет идентификатора теста (TS < AS);
-   - у истории, меняющей состояние, нет нефункциональных критериев (бюджет тика, память, переподключение, kill -9, отсутствие дюпов);
-   - путь из tasks не существует в дереве;
-   - tasks длиннее ~600 строк;
-   - отложенный пункт не имеет владельца.
-3. **Аудит неоднозначностей** (`/forge --preflight`, Opus). Выдаёт `R`/`D`-строки и карточки вопросов. Блокирующие человек закрывает сразу, остальные получают решение по умолчанию и уходят в аудит. Основание: модели не отличают неполную задачу от полной (Ambig-SWE), и единственное средство с эффектом — спросить до старта.
-4. **Нарезка на единицы** `{id, deps, R[], tier, owned_files}`. Цель — дифф ≤ ~200 строк на единицу (правки до 50 строк мержатся в 76–80% случаев, 101–500 — в 64%; число кругов ревью растёт с размером). Единицы с общими файлами идут последовательно.
-5. Карта репозитория (`digest.md`: как собрать и протестировать) проверяется запуском. В dotnet/runtime инструкции по сборке подняли успех агента с 38% до 69%.
-Результат: `queue.yaml` — очередь единиц со статусами. Она же статус этапа, машиночитаемый.
+## Three modes
+### 1. Spec preparation (human present, 30–90 min)
+1. `grilling` → `yamlkit-specify/plan/tasks` (as now).
+2. **`spec_lint.py`** (script, deterministic). Fails if:
+   - an AS has no test identifier (TS < AS);
+   - a state-changing story has no non-functional criteria (tick budget, memory, reconnect, kill -9, no dupes);
+   - a path from tasks does not exist in the tree;
+   - tasks is longer than ~600 lines;
+   - a deferred item has no owner.
+3. **Ambiguity audit** (`/forge --preflight`, Opus). Produces `R`/`D` lines and question cards. The human closes the blocking ones right away; the rest get a default decision and go to the audit. Rationale: models cannot tell an incomplete task from a complete one (Ambig-SWE), and the only remedy with an effect is to ask before starting.
+4. **Slicing into units** `{id, deps, R[], tier, owned_files}`. Target: diff ≤ ~200 lines per unit (changes up to 50 lines merge in 76–80% of cases, 101–500 in 64%; the number of review rounds grows with size). Units that share files run sequentially.
+5. The repository map (`digest.md`: how to build and test) is verified by running it. In dotnet/runtime, build instructions raised agent success from 38% to 69%.
+Result: `queue.yaml` — a queue of units with statuses. It is also the stage status, machine-readable.
 
-### 2. Автономный режим — исполнение (без человека)
-Драйвер `forge_run.py` идёт по `queue.yaml`. Для каждой единицы:
-1. Приёмочные тесты из `R` пишутся в контексте, не видевшем реализацию, и замораживаются (25% пойманных дефектов против 14%).
-2. Один писатель, свежий контекст; гейты; механику чинит Haiku.
-3. `forge_check.py` решает, готово ли. Слово модели не считается (приём Tekton).
-4. Ветка и PR на единицу. `tier: low` и зелёный check → автослияние в интеграционную ветку. `tier: high` → ждёт карточки.
-5. Заблокированная или дважды проваленная единица получает карточку, драйвер берёт следующую независимую. Прогон не останавливается.
-6. Около трети бюджета закладывается на исправления (у Factory 34%).
-В конце автономного прогона на интеграционной ветке идёт **тяжёлый контур** из профиля проекта (см. таблицу по типам систем). Провал → карточка и fix-единица в очередь. Одна независимая приёмка (свежий Opus) на весь прогон, не на единицу.
-Бюджет: свой накопительный лимит (встроенный не учитывает продолженные сессии), ожидание сброса rate limit, продолжение из `queue.yaml`.
+### 2. Autonomous mode — execution (no human)
+The `forge_run.py` driver walks `queue.yaml`. For each unit:
+1. Acceptance tests from `R` are written in a context that has not seen the implementation, and are frozen (25% of defects caught versus 14%).
+2. One writer, fresh context; gates; Haiku fixes the mechanics.
+3. `forge_check.py` decides whether it is done. The model's word does not count (Tekton's approach).
+4. A branch and a PR per unit. `tier: low` and a green check → auto-merge into the integration branch. `tier: high` → waits for cards.
+5. A blocked or twice-failed unit gets a card, and the driver takes the next independent one. The run does not stop.
+6. About a third of the budget is reserved for fixes (Factory: 34%).
+At the end of the autonomous run, the **heavy contour** from the project profile runs on the integration branch (see the table by system type). A failure → a card and a fix unit in the queue. One independent acceptance (fresh Opus) per run, not per unit.
+Budget: its own cumulative limit (the built-in one does not count resumed sessions), waiting for the rate limit to reset, resume from `queue.yaml`.
 
-### 3. Аудит (10–20 мин)
-`cards.html` — карточки по образцу навыка `hld-decision-cards`, по одной на каждое:
-- решение `D` («спека молчала → выбрано X, потому что …»; принять или изменить);
-- открытый вопрос;
-- единицу `tier: high` (дифф-стат, тесты, кнопка слияния);
-- провал (что упало, улики);
-- итог прогона (сделано / в очереди / стоимость по моделям).
-Ответы экспортируются в `answers.yaml`. Из них получаются правки спеки и новые единицы; следующий прогон начинается с них. В `main` попадает только то, что человек принял при аудите; для `tier: low` это можно заменить правилом автопринятия.
+### 3. Audit (10–20 min)
+`cards.html` — cards modeled on the `hld-decision-cards` skill, one for each of:
+- a decision `D` ("spec was silent → X chosen because …"; accept or change);
+- an open question;
+- a `tier: high` unit (diff stat, tests, merge button);
+- a failure (what failed, evidence);
+- the run summary (done / queued / cost by model).
+Answers are exported to `answers.yaml`. From them come spec edits and new units; the next run starts from them. Only what the human accepted at the audit lands in `main`; for `tier: low` this can be replaced by an auto-accept rule.
 
-**Режим с присутствием:** та же очередь, но остановка после каждой единицы и вопросы сразу (`--attended`).
+**Attended mode:** the same queue, but it stops after each unit and asks questions right away (`--attended`).
 
-## Модели
-| Работа | Модель | Основание |
+## Models
+| Work | Model | Rationale |
 |---|---|---|
-| Аудит спеки, нарезка, разбор провалов, финальная приёмка | Opus | здесь лежат наши промахи; планирование и структура дают ~+11 п. (ManagerWorker) |
-| Приёмочные тесты и код единицы | Sonnet по умолчанию; решит абляция `forge` против `forge-opus` | по качеству литература даёт ничью, по цене — выигрыш |
-| Дайджест, прогоны гейтов, автофикс механики | Haiku | около половины исправлений в разобранном проекте — механика |
+| Spec audit, slicing, failure analysis, final acceptance | Opus | this is where our misses are; planning and structure give ~+11 pts (ManagerWorker) |
+| Acceptance tests and unit code | Sonnet by default; an ablation of `forge` versus `forge-opus` will decide | the literature shows a tie on quality, a win on price |
+| Digest, gate runs, mechanics autofix | Haiku | about half of the fixes in the analyzed project are mechanics |
 
-## Что есть и что строить
-| Компонент | Состояние |
+## What exists and what to build
+| Component | State |
 |---|---|
-| Ядро автономного режима на одну спеку (`/forge`, `forge_run.py`, `forge_check.py`) | прототип; проверка на реальной спеке и бенч идут |
-| `--preflight` | есть в `/forge`, без карточек |
-| `spec_lint.py` | построить (скрипт) |
-| `queue.yaml` и обход очереди драйвером, ветка/PR на единицу | построить |
-| `cards.html` и `answers.yaml` | построить (переиспользовать hld-decision-cards) |
-| `powerpuff.yaml` (профиль проекта: тип системы, тяжёлый контур, правило автослияния) | построить; шаблоны по четырём типам систем |
-| Тяжёлый контур конкретного проекта | задачи самого проекта, ставятся в очередь первыми |
+| Autonomous-mode core for a single spec (`/forge`, `forge_run.py`, `forge_check.py`) | prototype; a check on a real spec and a bench are in progress |
+| `--preflight` | present in `/forge`, without cards |
+| `spec_lint.py` | to build (script) |
+| `queue.yaml` and queue traversal by the driver, branch/PR per unit | to build |
+| `cards.html` and `answers.yaml` | to build (reuse hld-decision-cards) |
+| `powerpuff.yaml` (project profile: system type, heavy contour, auto-merge rule) | to build; templates for the four system types |
+| A specific project's heavy contour | the project's own tasks, queued first |
 
-## Доказательство
-1. bob-bench (идёт): plain / lite / forge / forge-opus по протоколу — качество и цена ядра.
-2. Пилот на двух разных типах систем, чтобы проверить общность: сервер с состоянием и сервис с HTTP API. Метрики против истории проекта:
-   - доля переделок (было ~20–26%);
-   - сколько багов находит живой клиент после «зелёного»;
-   - минуты аудита;
-   - стоимость по моделям;
-   - единиц за прогон.
-3. Правило: компонент остаётся, только если его вклад виден в этих метриках. Убираем по одному (правило Anthropic).
+## Proof
+1. bob-bench (in progress): plain / lite / forge / forge-opus per the protocol — quality and cost of the core.
+2. A pilot on two different system types to check generality: a stateful server and a service with an HTTP API. Metrics against the project's history:
+   - rework share (was ~20–26%);
+   - how many bugs a live client finds after "green";
+   - audit minutes;
+   - cost by model;
+   - units per run.
+3. Rule: a component stays only if its contribution is visible in these metrics. Remove them one at a time (Anthropic's rule).
 
-## Честные границы
-- Без человека неоднозначность не разрешается, а только фиксируется; поэтому карточки, а не обещание «ноль вопросов». Блокирующий вопрос без ответа останавливает прогон (`blocking questions: Q1,Q4`, выход 1; после ответа в `.forge/questions.json` повторный запуск продолжает с того же места); `--assume-defaults` берёт умолчание аудитора, такие вопросы попадают в отчёт отдельным разделом.
-- Наличие спеки само по себе дефекты не снижает (ESEM 2026, 88 тыс. PR). Работают проверяемые критерии и замороженные тесты.
-- Про soak и replay в исполнении агентов данных нет; property-based тесты дают 56% валидных находок (n=50). Стабильность проверяется только пилотом.
+## Honest limits
+- Without a human, ambiguity is not resolved, only recorded; hence cards, not a promise of "zero questions". A blocking question without an answer stops the run (`blocking questions: Q1,Q4`, exit 1; after answering in `.forge/questions.json`, a re-run continues from the same place); `--assume-defaults` takes the auditor's default, and such questions go into the report as a separate section.
+- Having a spec does not by itself reduce defects (ESEM 2026, 88k PRs). What works is verifiable criteria and frozen tests.
+- There is no data on soak and replay in agent execution; property-based tests give 56% valid findings (n=50). Stability is verified only by a pilot.

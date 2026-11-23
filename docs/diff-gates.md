@@ -1,45 +1,45 @@
-# diff_gates: гейты на дифф единицы работы (любой стек)
+# diff_gates: gates on a work unit's diff (any stack)
 
-Скрипт `scripts/diff_gates.py` (stdlib). Ядро знает форматы отчётов, а не стеки: отчёт делает инструмент проекта, скрипт считает только по строкам диффа от `--base` (рабочее дерево, включая неотслеживаемые файлы). Вызывается как обычная команда профиля: решает код выхода.
+The script `scripts/diff_gates.py` (stdlib). The core knows report formats, not stacks: the report is produced by the project's tool, and the script counts only over the diff lines from `--base` (working tree, including untracked files). It is invoked like an ordinary profile command: the exit code decides.
 
-Коды выхода: `0` пройден, `1` провален, `3` оценить нельзя (нет или не разобран отчёт, не git-репозиторий, неизвестный формат, неоднозначное соответствие путей). Нет отчёта = провал, тихого пропуска нет.
+Exit codes: `0` passed, `1` failed, `3` cannot be evaluated (report missing or unparsed, not a git repository, unknown format, ambiguous path match). No report = failure; there is no silent skip.
 
-`python scripts/diff_gates.py <gate> --base <sha> [--root .] [--config powerpuff.yaml] [--json]`. С `--json` печатается `{gate, ok, value, threshold, details:[...]}`; при коде 3 добавляется `error`.
+`python scripts/diff_gates.py <gate> --base <sha> [--root .] [--config powerpuff.yaml] [--json]`. With `--json` it prints `{gate, ok, value, threshold, details:[...]}`; on exit code 3 it adds `error`.
 
-## Гейты
-| Гейт | Что считает | Вход | Ключи |
+## Gates
+| Gate | What it counts | Input | Keys |
 |---|---|---|---|
-| `coverage` | покрытие добавленных и изменённых исполняемых строк (тестовые файлы не считаются) | `--report` путь или glob; cobertura, lcov, go coverprofile, coverage.py json, jacoco | `--format auto`, `--min 80`, `--min-lines 1`, `--missing-file fail\|ignore`, `--exclude` (повторяемый) |
-| `duplication` | новый копипаст: окно из `--min-lines` строк, целиком добавленных в диффе, встречается в другом месте отслеживаемого кода (другой файл или другое место того же файла) | только git | `--min-lines 6`, `--max-new 0`, `--exclude` |
-| `complexity` | функции, пересекающие изменённые строки, с цикломатической сложностью выше порога | `--report`; lizard csv/xml, eslint json, radon json, gocyclo, sarif | `--format auto`, `--max 15`, `--base-report`, `--exclude` |
-| `size` | бюджет единицы: изменённые строки (добавлено + удалено) и файлы без тестов, lock- и сгенерированных файлов | только git | `--max-lines 400`, `--max-files 25`, `--exclude` |
-| `all` | запускает гейты из секции `diff_gates` профиля | `--config` | `--out` фрагмент `quality-report.json` |
+| `coverage` | coverage of added and changed executable lines (test files are not counted) | `--report` path or glob; cobertura, lcov, go coverprofile, coverage.py json, jacoco | `--format auto`, `--min 80`, `--min-lines 1`, `--missing-file fail\|ignore`, `--exclude` (repeatable) |
+| `duplication` | new copy-paste: a window of `--min-lines` lines fully added in the diff that occurs elsewhere in tracked code (another file or another place in the same file) | git only | `--min-lines 6`, `--max-new 0`, `--exclude` |
+| `complexity` | functions crossing the changed lines with cyclomatic complexity above the threshold | `--report`; lizard csv/xml, eslint json, radon json, gocyclo, sarif | `--format auto`, `--max 15`, `--base-report`, `--exclude` |
+| `size` | unit budget: changed lines (added + deleted) and files, excluding tests, lock files and generated files | git only | `--max-lines 400`, `--max-files 25`, `--exclude` |
+| `all` | runs the gates from the profile's `diff_gates` section | `--config` | `--out` a `quality-report.json` fragment |
 
-## Правила
-| Тема | Поведение |
+## Rules
+| Topic | Behavior |
 |---|---|
-| Строка не в отчёте, файл в отчёте | не исполняемая, игнорируется |
-| Изменённый кодовый файл не в отчётах | все его добавленные строки кода считаются непокрытыми и перечисляются; `--missing-file ignore` отключает; расширения вне таблицы языков `gate_guard` не считаются |
-| Ноль изменённых исполняемых строк (или меньше `--min-lines`) | пройден с пометкой |
-| Пути отчёта и репозитория | абсолютные, обратные слеши, `file://`, `sources` cobertura, префикс модуля из `go.mod`, пути относительно подпроекта (совпадение по суффиксу); неоднозначность, затрагивающая изменённый файл, даёт код 3 со списком |
-| Дубли: что не считается | окна из тривиальных строк (скобки, импорты, `end`); пустые и комментарные строки (префиксы по расширению, иначе `#`, `//`); код, перенесённый из другого места (там он удалён); окна с перекрытием внутри файла |
-| Дубли: что индексируется | файлы с известным расширением кода до 1 МБ; исключены `node_modules`, `bin`, `obj`, `dist`, `build`, `target`, `vendor`, `.git`, сгенерированные и минифицированные файлы |
-| Сложность и базовый отчёт | провал: сложность выше `--max` и (функции нет в базовом отчёте или она стала сложнее, чем на базе); сложность не выше базовой проходит как `pre-existing`; без базового отчёта проваливает каждая |
-| Сложность: нет диапазона строк | gocyclo даёт только начальную строку: пересечение проверяется по ней, в `details` есть пометка |
-| SARIF | правила, в id или имени которых есть `complex`; число берётся из текста сообщения |
+| Line not in the report, file in the report | not executable, ignored |
+| Changed code file not in the reports | all its added code lines count as uncovered and are listed; `--missing-file ignore` disables this; extensions outside the `gate_guard` language table are not counted |
+| Zero changed executable lines (or fewer than `--min-lines`) | passed with a note |
+| Report and repository paths | absolute, backslashes, `file://`, cobertura `sources`, module prefix from `go.mod`, paths relative to a subproject (suffix match); an ambiguity affecting a changed file gives exit code 3 with a list |
+| Duplicates: what is not counted | windows of trivial lines (braces, imports, `end`); empty and comment lines (prefixes by extension, otherwise `#`, `//`); code moved from elsewhere (it is deleted there); windows overlapping within a file |
+| Duplicates: what is indexed | files with a known code extension up to 1 MB; excluded: `node_modules`, `bin`, `obj`, `dist`, `build`, `target`, `vendor`, `.git`, generated and minified files |
+| Complexity and base report | fail: complexity above `--max` and (the function is not in the base report or became more complex than on the base); complexity not above the base passes as `pre-existing`; without a base report every one fails |
+| Complexity: no line range | gocyclo gives only the start line: the intersection is checked by it, and `details` carries a note |
+| SARIF | rules whose id or name contains `complex`; the number is taken from the message text |
 
-## Команды, которые делают отчёты
-| Стек | Покрытие | Сложность |
+## Commands that produce the reports
+| Stack | Coverage | Complexity |
 |---|---|---|
-| .NET | `dotnet test --collect:"XPlat Code Coverage"` (coverlet, cobertura в `TestResults/**/coverage.cobertura.xml`) | lizard |
-| JS/TS | `c8 --reporter=lcov npm test` или `jest --coverage --coverageReporters=lcov` (`coverage/lcov.info`) | `eslint -f json -o eslint.json --rule '{"complexity":["warn",1]}' src` (порог 1: в отчёте все функции, порог гейта задаёт `--max`) |
-| Python | `coverage run -m pytest && coverage json` (`coverage.json`) или `coverage xml` (cobertura) | `radon cc -j -s src > radon.json` |
+| .NET | `dotnet test --collect:"XPlat Code Coverage"` (coverlet, cobertura in `TestResults/**/coverage.cobertura.xml`) | lizard |
+| JS/TS | `c8 --reporter=lcov npm test` or `jest --coverage --coverageReporters=lcov` (`coverage/lcov.info`) | `eslint -f json -o eslint.json --rule '{"complexity":["warn",1]}' src` (threshold 1: all functions are in the report, the gate threshold is set by `--max`) |
+| Python | `coverage run -m pytest && coverage json` (`coverage.json`) or `coverage xml` (cobertura) | `radon cc -j -s src > radon.json` |
 | Rust | `cargo llvm-cov --lcov --output-path lcov.info` | `lizard -l rust --csv src > lizard.csv` |
 | Go | `go test -coverprofile=cover.out ./...` | `gocyclo . > gocyclo.txt` |
-| JVM | `mvn verify` с jacoco (`target/site/jacoco/jacoco.xml`) | `lizard -l java --csv src > lizard.csv` или `--xml` |
-| Любой язык | cobertura или lcov, что умеет инструмент | `lizard --csv .` (формат `lizard-csv`), `lizard --xml .` (формат `lizard-xml`) |
+| JVM | `mvn verify` with jacoco (`target/site/jacoco/jacoco.xml`) | `lizard -l java --csv src > lizard.csv` or `--xml` |
+| Any language | cobertura or lcov, whichever the tool supports | `lizard --csv .` (format `lizard-csv`), `lizard --xml .` (format `lizard-xml`) |
 
-## Профиль
+## Profile
 ```yaml
 gates:
   unit: [diff-coverage, duplication, complexity, size]
@@ -48,7 +48,7 @@ commands:
   duplication:   python scripts/diff_gates.py duplication --base {base} --max-new 0
   complexity:    python scripts/diff_gates.py complexity --base {base} --report eslint.json --max 15
   size:          python scripts/diff_gates.py size --base {base} --max-lines 400
-diff_gates:              # для `diff_gates.py all --base {base} --config powerpuff.yaml --out diff-gates.json`
+diff_gates:              # for `diff_gates.py all --base {base} --config powerpuff.yaml --out diff-gates.json`
   coverage:   {report: coverage/lcov.info, min: 80, missing_file: fail}
   duplication: {min_lines: 6, max_new: 0}
   complexity:
@@ -57,22 +57,22 @@ diff_gates:              # для `diff_gates.py all --base {base} --config powe
     base_report: base/eslint.json
   size:       {max_lines: 400, max_files: 25}
 ```
-### Подстановки в командах
-Скрипт-драйвер подставляет в строки команд профиля (`commands`, `format_fix`, `final.commands` очереди) до запуска, без раскрытия переменных оболочки: `{base}` — коммит, с которого стартовал юнит, `{root}` — корень репозитория, `{plugin}` — корень плагина (прямые слэши). Неизвестный `{...}` остаётся как есть. Те же значения экспортируются в окружение гейта: `POWERPUFF_BASE`, `POWERPUFF_ROOT`, `POWERPUFF_PLUGIN`. Вызов скрипта плагина в профиле: `python "{plugin}/scripts/diff_gates.py" size --base {base} --max-lines 400` (профиль переносим между машинами).
+### Substitutions in commands
+The driver script substitutes into the profile command strings (`commands`, `format_fix`, the queue's `final.commands`) before running, without expanding shell variables: `{base}` — the commit the unit started from, `{root}` — the repository root, `{plugin}` — the plugin root (forward slashes). An unknown `{...}` is left as is. The same values are exported to the gate's environment: `POWERPUFF_BASE`, `POWERPUFF_ROOT`, `POWERPUFF_PLUGIN`. Calling a plugin script in a profile: `python "{plugin}/scripts/diff_gates.py" size --base {base} --max-lines 400` (the profile is portable between machines).
 
-| Где | `{base}` |
+| Where | `{base}` |
 |---|---|
-| `forge_run.py` | `start_sha` из `.forge/state.json` (HEAD на старте прогона); в проверке чистой базы — текущий HEAD (пустой дифф: гейты по дифф проходят по правилу «изменённых строк нет») |
-| `queue_run.py`, финальный контур | `base_sha` прогона |
-| `hook_stop.py` | `HEAD` (дифф = незакоммиченные правки) |
-| `prepare_run.py`, проверка базы | текущий HEAD |
+| `forge_run.py` | `start_sha` from `.forge/state.json` (HEAD at run start); in the clean-base check, the current HEAD (empty diff: diff gates pass by the "no changed lines" rule) |
+| `queue_run.py`, final contour | the run's `base_sha` |
+| `hook_stop.py` | `HEAD` (diff = uncommitted edits) |
+| `prepare_run.py`, base check | the current HEAD |
 
-Без PyYAML секция `diff_gates` читается встроенным разбором: два уровня, списки только в виде `[a, b]`. `all` пишет фрагмент `{"schema": 1, "tool": "diff_gates", "gates": [...]}` с id `diff-coverage`, `duplication`, `complexity`, `size`; не оценённый гейт получает `status: failed` и поле `error`.
+Without PyYAML the `diff_gates` section is read by a built-in parser: two levels, lists only in the form `[a, b]`. `all` writes a fragment `{"schema": 1, "tool": "diff_gates", "gates": [...]}` with ids `diff-coverage`, `duplication`, `complexity`, `size`; a gate that could not be evaluated gets `status: failed` and an `error` field.
 
-## Ограничения
-| Что | Почему |
+## Limitations
+| What | Why |
 |---|---|
-| Покрытие и сложность работают на языках, для которых есть отчёт; сам скрипт отчёты не строит | ядро не знает стеков |
-| Дубли ищутся по нормализованным строкам, не по синтаксису: переименование переменных скрывает копию | цена простоты; семантические клоны ловит jscpd |
-| Для `size` переименование без правок не считается; бинарные файлы пропускаются | `git diff --numstat -M` |
-| Файлы-тесты определяются таблицей языков `gate_guard` (в том числе подстрокой `test` в пути) | единый источник правды |
+| Coverage and complexity work on languages for which a report exists; the script itself does not build reports | the core does not know stacks |
+| Duplicates are found by normalized lines, not syntax: renaming variables hides a copy | the price of simplicity; jscpd catches semantic clones |
+| For `size`, a rename without edits is not counted; binary files are skipped | `git diff --numstat -M` |
+| Test files are determined by the `gate_guard` language table (including the substring `test` in the path) | a single source of truth |

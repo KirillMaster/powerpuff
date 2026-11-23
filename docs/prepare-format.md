@@ -1,6 +1,6 @@
-# prepare — подготовка спеки и `prepare_run.py`
+# prepare — spec preparation and `prepare_run.py`
 
-`prepare_run.py` — скрипт-оркестратор подготовки спеки при человеке рядом. Результат — `queue.yaml` для `queue_run.py` (`docs/queue-format.md`), который автономный прогон исполняет без угадывания. Модель только предлагает: все её сессии с инструментами только для чтения (`Read,Grep,Glob`), файлы пишет скрипт, проверяет скрипт.
+`prepare_run.py` is the script orchestrator for preparing a spec with a human nearby. The result is a `queue.yaml` for `queue_run.py` (`docs/queue-format.md`), which an autonomous run executes without guessing. The model only proposes: all its sessions have read-only tools (`Read,Grep,Glob`); the script writes the files and the script validates them.
 
 ```
 python scripts/prepare_run.py <spec dir | spec file | "idea text"> [--repo .] [--model opus] [--out queue.yaml]
@@ -8,76 +8,76 @@ python scripts/prepare_run.py <spec dir | spec file | "idea text"> [--repo .] [-
        [--accept-lint] [--skip-base-check] [--dry-run]
 ```
 
-## Флаги
-| Флаг | По умолчанию | Смысл |
+## Flags
+| Flag | Default | Meaning |
 |---|---|---|
-| `--model` | `opus` | модель сессий вопросов и нарезки; попадает в `model` очереди |
-| `--out` | `queue.yaml` | куда писать очередь (относительно текущего каталога) |
-| `--max-unit-lines` | 200 | предел `est_lines` единицы |
-| `--max-usd` | 5 | накопительный условный бюджет подготовки; проверяется перед каждой сессией |
-| `--no-wait` | выкл | лимит подписки -> выход 3 вместо ожидания |
-| `--answers` | нет | `questions.json` с заполненными `answer`; ответы подставляются по `id` |
-| `--assume-defaults` | выкл | неотвеченные `blocking` решаются дефолтами аудита (в нарезку идут с пометкой `[blocking, assumed]`) |
-| `--accept-lint` | выкл | продолжить при ошибках `spec_lint`; находки попадают в шапку очереди |
-| `--skip-base-check` | выкл | не проверять базу гейтами |
-| `--dry-run` | выкл | только `lint` и `base`, состояние не пишется |
-| `--req-regex` | `\b(?:FR\|NFR\|AS\|US)-\d+\b\|\bR\d+\b` | какие id требований спеки обязаны быть покрыты единицами |
-| `--queue-max-usd` / `--queue-max-hours` | 60 / 8 | `budget` испускаемой очереди |
-| `--gate-timeout` | 1800 | секунд на гейт при проверке базы |
+| `--model` | `opus` | model for the questions and slicing sessions; ends up in the queue's `model` |
+| `--out` | `queue.yaml` | where to write the queue (relative to the current directory) |
+| `--max-unit-lines` | 200 | limit on a unit's `est_lines` |
+| `--max-usd` | 5 | cumulative notional preparation budget; checked before every session |
+| `--no-wait` | off | subscription limit -> exit 3 instead of waiting |
+| `--answers` | none | `questions.json` with filled-in `answer`; answers are matched by `id` |
+| `--assume-defaults` | off | unanswered `blocking` questions are resolved with the audit's defaults (they go into slicing marked `[blocking, assumed]`) |
+| `--accept-lint` | off | continue despite `spec_lint` errors; findings go into the queue header |
+| `--skip-base-check` | off | do not check the base with the gates |
+| `--dry-run` | off | only `lint` and `base`, no state is written |
+| `--req-regex` | `\b(?:FR\|NFR\|AS\|US)-\d+\b\|\bR\d+\b` | which spec requirement ids must be covered by units |
+| `--queue-max-usd` / `--queue-max-hours` | 60 / 8 | `budget` of the emitted queue |
+| `--gate-timeout` | 1800 | seconds per gate during the base check |
 
-## Стадии
-| Стадия | Что происходит | Остановка |
+## Stages
+| Stage | What happens | Stop |
 |---|---|---|
-| `lint` | каталог спеки -> `spec_lint.lint`; идея и файл пропускаются с пометкой | ошибки -> выход 1, находки в выводе и `lint.json` |
-| `base` | профиль `powerpuff.yaml`: все гейты на нетронутой базе; без профиля или без `approved: true` — строка `gates: no approved profile` | красная база или нет инструмента -> выход 1 с именами гейтов, без затрат |
-| `questions` | одна сессия аудита спеки против репозитория: Q-строки (`Q<n> [blocking\|non-blocking\|info]: ... \| default: ... \| cost of a wrong guess: ...`) и D-строки; разбор в `questions.json` (формат forge) и `decisions.md` | неотвеченные `blocking` -> таблица и выход 4 |
-| `slice` | одна сессия -> черновик `units.yaml`; проверка скриптом; проблемы -> сессия исправления с точным списком, до 2 раундов | всё ещё невалидно -> выход 1, список проблем, черновик остаётся |
-| `emit` | `--out`; запуск `queue_run.py --dry-run`, печать порядка исполнения | валидатор отклонил -> выход 1 |
+| `lint` | spec directory -> `spec_lint.lint`; an idea and a file are skipped with a note | errors -> exit 1, findings in the output and `lint.json` |
+| `base` | `powerpuff.yaml` profile: all gates on the untouched base; without a profile or without `approved: true` — the line `gates: no approved profile` | red base or missing tool -> exit 1 with gate names, no spend |
+| `questions` | one session auditing the spec against the repository: Q-lines (`Q<n> [blocking\|non-blocking\|info]: ... \| default: ... \| cost of a wrong guess: ...`) and D-lines; parsed into `questions.json` (forge format) and `decisions.md` | unanswered `blocking` -> table and exit 4 |
+| `slice` | one session -> draft `units.yaml`; checked by the script; problems -> a fix session with the exact list, up to 2 rounds | still invalid -> exit 1, list of problems, the draft stays |
+| `emit` | `--out`; runs `queue_run.py --dry-run`, prints the execution order | validator rejected -> exit 1 |
 
-Повторный запуск продолжает с места. Сессия вопросов повторно не запускается, пока есть `questions.json`; чтобы начать заново, удалить каталог состояния.
+A re-run resumes from where it stopped. The questions session is not run again while `questions.json` exists; to start over, delete the state directory.
 
-## Детерминированная проверка черновика
-Все проблемы собираются одним списком:
-| Проверка | Источник |
+## Deterministic draft check
+All problems are collected into a single list:
+| Check | Source |
 |---|---|
-| схема, уникальные id, зависимости существуют, нет циклов, общий файл без зависимости между единицами, текст `spec` | валидатор `queue_run.normalize` |
-| `risk` задан (`low`/`high`), `est_lines` число и не больше `--max-unit-lines` | скрипт |
-| каждый id требования спеки (`--req-regex`; для каталога — только `spec.yaml`/`spec.md`) назначен хотя бы одной единице | скрипт |
-| каталог файла существует в репозитории или создаётся этой единицей либо единицей из цепочки её зависимостей | скрипт |
+| schema, unique ids, dependencies exist, no cycles, a shared file without a dependency between units, the `spec` text | `queue_run.normalize` validator |
+| `risk` is set (`low`/`high`), `est_lines` is a number and not above `--max-unit-lines` | script |
+| every spec requirement id (`--req-regex`; for a directory — only `spec.yaml`/`spec.md`) is assigned to at least one unit | script |
+| the file's directory exists in the repository or is created by this unit or a unit in its dependency chain | script |
 
-Выбор `risk: high` для единиц, которых коснулся блокирующий вопрос, держится на промпте; скрипт его не проверяет.
+Choosing `risk: high` for units touched by a blocking question relies on the prompt; the script does not check it.
 
-## Вопросы и ответы
-Выход 4: `PREPARE: needs answers <путь к questions.json>`. Человек заполняет `answer` в `questions.json` (или `--answers файл`, или `--assume-defaults`) и повторяет команду. Ответы идут нарезке блоком `Human decisions (binding)`, дефолты — блоком `Defaults taken`, D-строки аудита — блоком `Default decisions of the audit`.
+## Questions and answers
+Exit 4: `PREPARE: needs answers <path to questions.json>`. The human fills in `answer` in `questions.json` (or `--answers file`, or `--assume-defaults`) and repeats the command. Answers go to slicing in a `Human decisions (binding)` block, defaults in a `Defaults taken` block, the audit's D-lines in a `Default decisions of the audit` block.
 
-## Состояние `<repo>/.powerpuff/prepare/<slug>/` (каталог в `.git/info/exclude`)
-| Файл | Содержимое |
+## State `<repo>/.powerpuff/prepare/<slug>/` (the directory is in `.git/info/exclude`)
+| File | Contents |
 |---|---|
-| `state.json` | стадии, стоимость (`total_usd`, по моделям и стадиям, сессии), число раундов исправления |
-| `spec.md` | копия спеки (каталог — склейка `spec/plan/tasks/...`; идея — её текст) |
-| `lint.json` | результат `spec_lint` |
-| `questions.json`, `decisions.md` | вопросы с ответами; D-строки |
-| `units.yaml`, `slice.raw.txt` | черновик единиц (JSON без PyYAML); сырой ответ нарезки |
-| `progress.md` | журнал |
+| `state.json` | stages, cost (`total_usd`, by model and stage, sessions), number of fix rounds |
+| `spec.md` | copy of the spec (directory — a concatenation of `spec/plan/tasks/...`; idea — its text) |
+| `lint.json` | `spec_lint` result |
+| `questions.json`, `decisions.md` | questions with answers; D-lines |
+| `units.yaml`, `slice.raw.txt` | draft units (JSON without PyYAML); raw slicing response |
+| `progress.md` | log |
 
-`slug`: имя каталога спеки или файла; для идеи `idea-<sha1[:8]>`.
+`slug`: the name of the spec directory or file; for an idea `idea-<sha1[:8]>`.
 
-## Результат
-`queue.yaml`: `run_id` = `<дата>-<slug>`, `base` = текущая ветка, `spec`, `budget`, `model`, `auto_merge: [low]`, `final.commands` из секции `final` профиля (если есть), единицы `{id, title, deps, risk, requirements, files, spec}`. Шапка-комментарий:
+## Result
+`queue.yaml`: `run_id` = `<date>-<slug>`, `base` = current branch, `spec`, `budget`, `model`, `auto_merge: [low]`, `final.commands` from the profile's `final` section (if any), units `{id, title, deps, risk, requirements, files, spec}`. Header comment:
 ```
 # units: 2 (low 1, high 1)
 # requirements covered: 4/4
 # questions: answered 1, defaulted 1
-# lint accepted: 1 error(s) (--accept-lint)      (только с --accept-lint)
+# lint accepted: 1 error(s) (--accept-lint)      (only with --accept-lint)
 # start: python .../queue_run.py <out> --repo <repo>
 ```
-Без PyYAML файл пишется как JSON без шапки (шапка печатается).
+Without PyYAML the file is written as JSON without the header (the header is printed).
 
-## Коды выхода и последняя строка
-| Код | Строка | Условие |
+## Exit codes and last line
+| Code | Line | Condition |
 |---|---|---|
-| 0 | `PREPARE: ready <path>` | очередь записана и принята валидатором |
+| 0 | `PREPARE: ready <path>` | the queue is written and accepted by the validator |
 | 0 | `PREPARE: dry-run ok` | `--dry-run` |
-| 1 | `PREPARE: failed (<причина>)` | ошибки линтера, красная база, бюджет, невалидный черновик, отказ валидатора, не git-репозиторий |
-| 3 | `PREPARE: rate limited (rerun to resume)` | лимит подписки с `--no-wait` |
-| 4 | `PREPARE: needs answers <path>` | есть неотвеченные `blocking` |
+| 1 | `PREPARE: failed (<reason>)` | linter errors, red base, budget, invalid draft, validator rejection, not a git repository |
+| 3 | `PREPARE: rate limited (rerun to resume)` | subscription limit with `--no-wait` |
+| 4 | `PREPARE: needs answers <path>` | there are unanswered `blocking` questions |

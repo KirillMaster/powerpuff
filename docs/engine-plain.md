@@ -1,47 +1,47 @@
-# Движок `plain` — один контекст модели + проверки скриптом
+# The `plain` engine — one model context + script-run checks
 
-Замер показал: один сеанс Opus без оркестрации даёт то же качество, что многосессионный `forge`, при стоимости в 3–4 раза ниже (на многоэтапном проекте в 8). Поэтому по умолчанию `forge_run.py --engine plain`: одна модель, один контекст (`--resume <session_id>`), а всё, что можно проверить детерминированно, делает скрипт и не тратит сессии. `--engine forge` — прежний конвейер без изменений. Решение записано в `.forge/state.json` (`engine`), перезапуск его сохраняет.
+The measurement showed that a single Opus session with no orchestration gives the same quality as the multi-session `forge` at a cost 3–4 times lower (8 times on the multi-stage project). So `forge_run.py --engine plain` is the default: one model, one context (`--resume <session_id>`), and everything that can be checked deterministically is done by the script and spends no sessions. `--engine forge` is the previous pipeline, unchanged. The decision is recorded in `.forge/state.json` (`engine`), and a restart preserves it.
 
-## Ход прогона
-| Шаг (`state.stage`) | Кто | Что происходит |
+## Run flow
+| Step (`state.stage`) | Who | What happens |
 |---|---|---|
-| setup | скрипт | команда `setup` профиля (установка зависимостей: пресеты TS — `{pm} install`, Python — `pip install -r requirements.txt` при наличии файла, .NET — `dotnet restore`) один раз до base check; провал: утверждённый профиль → failed, черновик → предупреждение в отчёте |
-| base check | скрипт | все гейты профиля на нетронутой базе (в очереди пропускается, если это дерево уже было зелёным; setup выполняется всё равно). Утверждённый профиль: красная база → failed (`--allow-red-base` пропускает). Черновик из пресетов: красные на базе гейты исключаются и перечисляются в отчёте |
-| `plain-tests`, ход 1 | модель (`--model`, по умолчанию `model` профиля, иначе opus) | вопросы `Q<n> [blocking\|non-blocking\|info]: … \| default: … \| cost of a wrong guess: …` → `.forge/questions.json`; приёмочные тесты только НОВЫМИ файлами; код не пишет |
-| охрана тестов | скрипт | правки существующих файлов откатываются (исключения: манифесты, `test_infra`), чужие не-тестовые файлы удаляются; нет тестов → один `--resume` с просьбой, затем failed |
-| вопросы | скрипт | `blocking` без ответа и без `--assume-defaults` → `FORGE: failed (blocking questions: …)`, exit 1, продолжение с того же шага; ответы возвращаются модели той же сессией |
-| покрытие требований | скрипт | id вида `R<n>` из спеки, не названные ни в одном новом тесте → один `--resume` с просьбой дописать тесты; что осталось — строка `uncovered` в отчёте (не блокирует: после заморозки это уже не исправить) |
-| заморозка | скрипт | `.forge/frozen.sha256` + `.forge/frozen.json`, коммит; `hook_protect` блокирует правки этих файлов в сессиях прогона |
-| red-on-base | скрипт | тест-гейты на базе должны быть красными, иначе тот же сеанс получает `vacuous`-просьбу |
-| `plain-build`, ход 2 | `--model-build` (иначе `model_build` профиля, иначе `--model`), НОВАЯ сессия | «реализуй спеку, замороженные тесты: …, не править»; спека ≤ 30K символов вставлена в промпт, иначе путь `.forge/spec.md`. Контекст хода 1 (тесты, вопросы) не тянется |
-| гейты | скрипт | `forge_check` + `gate_guard` по тирам профиля; нет инструмента = провал; правка замороженного теста → восстановление из git + нарушение (`frozen_violations`) |
-| фикс-раунды | `--model-fix` (иначе `model_fix` профиля, иначе модель build) | красное → сессия build продолжается (`--resume`) с упавшими гейтами и хвостом; другая модель → новая сессия с короткой передачей дел (спека по пути, `git diff --stat`, гейты, красный вывод). Последний раунд при модели ≠ `--model` эскалируется на `--model`. Не больше `--max-fix-rounds` (4). Раунд без изменений в дереве → `FORGE: failed (stuck: …)`, exit 1, продолжение с `plain-build`: человек отвечает по `.forge/disputes.md` (решение — `answer` в `.forge/questions.json`, попадёт в следующий раунд) |
-| accept | `--model`, свежий контекст | только с `--accept`: прежняя приёмка Opus |
-| report | скрипт | `.forge/REPORT.md`, `quality-report.json`, последняя строка `FORGE: done\|failed` |
+| setup | script | the profile's `setup` command (dependency install: TS presets — `{pm} install`, Python — `pip install -r requirements.txt` if the file exists, .NET — `dotnet restore`) once before the base check; on failure: approved profile → failed, draft → a warning in the report |
+| base check | script | all profile gates on the untouched base (skipped in the queue if this tree was already green; setup runs anyway). Approved profile: red base → failed (`--allow-red-base` skips). Draft from presets: gates red on the base are excluded and listed in the report |
+| `plain-tests`, turn 1 | model (`--model`, default the profile's `model`, otherwise opus) | questions `Q<n> [blocking\|non-blocking\|info]: … \| default: … \| cost of a wrong guess: …` → `.forge/questions.json`; acceptance tests only as NEW files; writes no code |
+| test guard | script | edits to existing files are reverted (exceptions: manifests, `test_infra`), foreign non-test files are deleted; no tests → one `--resume` with a request, then failed |
+| questions | script | `blocking` unanswered and no `--assume-defaults` → `FORGE: failed (blocking questions: …)`, exit 1, resume from the same step; answers are returned to the model in the same session |
+| requirement coverage | script | ids of the form `R<n>` from the spec not named in any new test → one `--resume` asking to add tests; what remains is the `uncovered` line in the report (does not block: after the freeze it can no longer be fixed) |
+| freeze | script | `.forge/frozen.sha256` + `.forge/frozen.json`, commit; `hook_protect` blocks edits to these files in the run's sessions |
+| red-on-base | script | test gates on the base must be red, otherwise the same session gets a `vacuous` request |
+| `plain-build`, turn 2 | `--model-build` (otherwise the profile's `model_build`, otherwise `--model`), NEW session | "implement the spec, frozen tests: …, do not edit"; a spec ≤ 30K characters is inlined in the prompt, otherwise the path `.forge/spec.md`. The context of turn 1 (tests, questions) is not carried over |
+| gates | script | `forge_check` + `gate_guard` by the profile's tiers; no tool = failure; an edit to a frozen test → restore from git + a violation (`frozen_violations`) |
+| fix rounds | `--model-fix` (otherwise the profile's `model_fix`, otherwise the build model) | red → the build session continues (`--resume`) with the failed gates and a tail; another model → a new session with a short handoff (spec by path, `git diff --stat`, gates, red output). The last round with a model ≠ `--model` escalates to `--model`. No more than `--max-fix-rounds` (4). A round with no changes in the tree → `FORGE: failed (stuck: …)`, exit 1, resume from `plain-build`: the human answers via `.forge/disputes.md` (the decision is `answer` in `.forge/questions.json`, it goes into the next round) |
+| accept | `--model`, fresh context | only with `--accept`: the previous Opus acceptance |
+| report | script | `.forge/REPORT.md`, `quality-report.json`, the last line `FORGE: done\|failed` |
 
-## Флаги
-| Флаг | Значение |
+## Flags
+| Flag | Meaning |
 |---|---|
-| `--engine plain\|forge` | движок, по умолчанию `plain` |
-| `--max-fix-rounds N` | сколько раз продолжить сессию с красными гейтами (4) |
-| `--model-build` / `--model-fix` | модели хода реализации и фикс-раундов (профиль: `model_build` / `model_fix`) |
-| `--accept` | после зелёных гейтов одна независимая приёмка |
-| остальные | как у forge: `--model`, `--max-usd`, `--max-hours`, `--no-wait`, `--max-outage-min`, `--assume-defaults`, `--allow-red-base`, `--final`, `--stream`, `--preflight` не поддерживается (аудита нет) |
+| `--engine plain\|forge` | engine, default `plain` |
+| `--max-fix-rounds N` | how many times to continue the session with red gates (4) |
+| `--model-build` / `--model-fix` | models for the implementation turn and fix rounds (profile: `model_build` / `model_fix`) |
+| `--accept` | one independent acceptance after green gates |
+| others | as in forge: `--model`, `--max-usd`, `--max-hours`, `--no-wait`, `--max-outage-min`, `--assume-defaults`, `--allow-red-base`, `--final`, `--stream`; `--preflight` is not supported (no audit) |
 
-В `queue.yaml`: ключ `engine: plain|forge`, CLI `queue_run.py --engine` перекрывает его; значение уходит в `forge_run.py` каждой единицы.
+In `queue.yaml`: the key `engine: plain|forge`; the CLI `queue_run.py --engine` overrides it; the value is passed to each unit's `forge_run.py`.
 
-## Требования и ограничения
-| Что | Как |
+## Requirements and limitations
+| What | How |
 |---|---|
-| профиль | гейты из `powerpuff.yaml` (модель их не выбирает). Без него — черновик по пресетам стека в `.forge/powerpuff.draft.yaml` (`approved: false`); стек не распознан → `FORGE: failed`, сессии не тратятся |
-| дубликаты | `diff_gates duplication` не считает клоны внутри замороженных тестов (их нельзя править), но копипаст из них в код ловит |
-| `--model` | опция CLI > `model` в профиле > `opus` |
-| защита хуком | `.forge/frozen.json` учитывается `hook_protect.py` независимо от `hooks.protect`; файл удаляется в конце прогона |
-| API недоступен / лимит | как в forge: ожидание без траты раунда, `FORGE: paused (API unreachable)`, exit 3; перезапуск продолжает |
+| profile | gates from `powerpuff.yaml` (the model does not choose them). Without it — a draft from the stack presets in `.forge/powerpuff.draft.yaml` (`approved: false`); stack not recognized → `FORGE: failed`, no sessions spent |
+| duplicates | `diff_gates duplication` does not count clones inside frozen tests (they cannot be edited), but catches copy-paste from them into code |
+| `--model` | CLI option > `model` in the profile > `opus` |
+| hook protection | `.forge/frozen.json` is honored by `hook_protect.py` regardless of `hooks.protect`; the file is deleted at the end of the run |
+| API unavailable / limit | as in forge: waiting without spending a round, `FORGE: paused (API unreachable)`, exit 3; a restart continues |
 
-## Возобновление
-| Убит во время | Что сделает повторный запуск |
+## Resume
+| Killed during | What a re-run does |
 |---|---|
-| ход 1 | повторит ход 1 свежей сессией (снимок грязного дерева до хода хранится в state) |
-| ход 2 | продолжит сессию хода 1 (`--resume`) с пометкой «прошлая попытка прервана» |
-| фикс-раунд | заново проверит гейты и повторит этот раунд в той же сессии |
+| turn 1 | repeats turn 1 with a fresh session (a snapshot of the dirty tree before the turn is kept in state) |
+| turn 2 | continues the turn-1 session (`--resume`) with a note "previous attempt interrupted" |
+| fix round | re-checks the gates and repeats that round in the same session |

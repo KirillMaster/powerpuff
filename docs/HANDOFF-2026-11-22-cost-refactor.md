@@ -1,61 +1,61 @@
-# Handoff: рефакторинг powerpuff (расход + скорость), 2026-11-22
+# Handoff: powerpuff refactor (cost + speed), 2026-11-22
 
-## Цель следующей сессии
-1. Отрефакторить плагин powerpuff (`C:/pet/powerpuff`, GitHub KirillMaster/powerpuff, v0.2.0) по списку ниже.
-2. Обновить интеграции: `C:/pet/vetal_project` (ppar), `C:/pet/dasha_b_rabota_bot`, `C:/pet/tictactoe` (у всех есть `powerpuff.yaml`).
-3. Перезапустить vetal_project с места остановки.
+## Goal of the next session
+1. Refactor the powerpuff plugin (`C:/pet/powerpuff`, GitHub KirillMaster/powerpuff, v0.2.0) per the list below.
+2. Update integrations: `C:/pet/vetal_project` (ppar), `C:/pet/dasha_b_rabota_bot`, `C:/pet/tictactoe` (all have `powerpuff.yaml`).
+3. Restart vetal_project from where it stopped.
 
-## Данные (ночь 21→22.11, vetal_project)
-- Полный отчёт: `C:/Work/notes/claude-usage-vetal-powerpuff-2026-11-22.md`. Langfuse: http://localhost:3000/project/claude-code (поднят).
-- 12 ч: 3 640 вызовов Opus, 618M токенов чтения из кэша, ≈$544 по API (~34% недельного лимита). 81 запуск, 64 юнита в `queue.yaml`.
-- Статус ~11:08: 39 merged, 4 running (U33, U39, U42, U53), 1 failed (U01), 20 не начаты (U10b U13b U36 U40 U41 U43–U47 U49 U51 U52 U55–U60 U62).
-- U07 ждал ответа на Q1 (`.forge/questions.json`), потом смержен.
-- Время (28.6 юнит-часа): plain-build 27%, **пауза по rate limit 21% (6 ч, 98 пауз)**, plain-tests 15%, setup (`dotnet restore`) 9%, check-гейты 6%. Окна простоя в ppar-main.log: 02:48→04:52 (124 мин), 09:12→10:32 (79 мин) и ещё 6 по ~20–30 мин.
-- Деньги: plain-tests 44%, plain-build 40%, cover 10%, fix 6%; не дошло до merge 41% ($176).
+## Data (night 21→22.11, vetal_project)
+- Full report: `C:/Work/notes/claude-usage-vetal-powerpuff-2026-11-22.md`. Langfuse: http://localhost:3000/project/claude-code (up).
+- 12 h: 3,640 Opus calls, 618M cache-read tokens, ≈$544 at API prices (~34% of the weekly limit). 81 runs, 64 units in `queue.yaml`.
+- Status ~11:08: 39 merged, 4 running (U33, U39, U42, U53), 1 failed (U01), 20 not started (U10b U13b U36 U40 U41 U43–U47 U49 U51 U52 U55–U60 U62).
+- U07 waited for an answer to Q1 (`.forge/questions.json`), then was merged.
+- Time (28.6 unit-hours): plain-build 27%, **rate-limit pause 21% (6 h, 98 pauses)**, plain-tests 15%, setup (`dotnet restore`) 9%, check gates 6%. Idle windows in ppar-main.log: 02:48→04:52 (124 min), 09:12→10:32 (79 min) and 6 more of ~20–30 min.
+- Money: plain-tests 44%, plain-build 40%, cover 10%, fix 6%; did not reach merge 41% ($176).
 
-## Проблема → решение
-| # | Проблема | Решение | Где | Эффект |
+## Problem → solution
+| # | Problem | Solution | Where | Effect |
 |---|---|---|---|---|
-| 1 | В промпт каждого юнита вшита вся спека, ~211K символов (~100K токенов): spec.yaml 37K, tasks.yaml 60K, spec.md, tasks.md, contracts, data-model; спецификация юнита — 2K. Каждый вызов перечитывает ~170K | В промпт — только unit spec + его T-задачи + срезы contracts/data-model по `requirements`/`files` юнита; остальное дать путями для Read. Цель — ≤15K | `forge_run.py` (сборка промпта для plain-tests), `queue_run.py` (unit spec) | −40–45% $ и быстрее каждый вызов |
-| 2 | Rate limit `five_hour rejected` → `FORGE: paused` → юнит уходит в pending → ppar запускает его заново с нуля (25 брошенных запусков, $42) | Пауза = ждать `resetsAt` из `rate_limit_event` и продолжать ту же сессию/стадию; не создавать новый run | `forge_run.py:391 session()` (RateLimited), `ppar.py` (обработка pending) | −10%, без потери работы |
-| 3 | Неограниченные повторы: U05 ×6, U07 ×5, U04 ×4; $68 — повторы юнитов, которые потом смержились | Не больше 2 запусков на юнит, потом `needs-human`; при повторе передавать `.forge/disputes.md` и причину прошлой неудачи | `ppar.py` / `queue_run.py` | −10–15% |
-| 4 | Fix round ничего не меняет в дереве (19 раз), но юнит всё равно перезапускается | «no change to the tree» → сразу `needs-answer` с вопросом из disputes, без повтора | `forge_run.py` (fix loop) | меньше пустых прогонов |
-| 5 | Всё на Opus, включая build/fix (46% $) | Отдельный параметр `model_build` / `model_fix` (Sonnet), Opus оставить для plain-tests | `queue_run.py:426`, `forge_run.py --model` | −15–18% (следить за числом fix rounds) |
-| 6 | `--resume` протаскивает контекст через tests → cover → build → fix (120K → 245K) | build/fix — новая сессия с короткой передачей дел: diff + красный гейт + хвост ошибки | `forge_run.py` | −5–10% |
-| 7 | `dotnet restore` на каждый worktree — 2.5 ч из 28.6 | Общий NuGet-кэш (`NUGET_PACKAGES`) / restore один раз в int-worktree и hardlink `obj` | `ppar.py` / `setup` в `powerpuff.yaml` | −9% времени |
-| 8 | Параллельность 4 упирается в 5-часовой лимит: эффективно ~2.5 юнита одновременно | Сначала п.1–6 (меньше токенов → лимит дольше держится); затем авто-throttle: снижать MAXPAR при `allowed_warning` | `ppar.py` | стабильный темп |
-| 9 | ppar.py — самописная обёртка в `vetal_project/.powerpuff/`, не в плагине | Перенести параллельные волны (int-branch, merge, MAXPAR) в плагин (`queue_run.py --parallel N`) | плагин | одна интеграция на все проекты |
-| 10 | Headless-сессии наследуют всё пользовательское окружение (11 плагинов, 3 MCP, hooks mem0/telemetry) — системная часть всего ~12K, но лишние хуки и `ToolSearch` | `--strict-mcp-config` без MCP, `POWERPUFF_DRIVER=1` → глушить mem0/telemetry-хуки | `forge_run.py:397` | мелочь, чистота |
+| 1 | The whole spec is baked into every unit's prompt, ~211K characters (~100K tokens): spec.yaml 37K, tasks.yaml 60K, spec.md, tasks.md, contracts, data-model; the unit's own spec is 2K. Every call rereads ~170K | Put only the unit spec + its T-tasks + slices of contracts/data-model by the unit's `requirements`/`files` in the prompt; give the rest as paths for Read. Target ≤15K | `forge_run.py` (plain-tests prompt assembly), `queue_run.py` (unit spec) | −40–45% $ and each call is faster |
+| 2 | Rate limit `five_hour rejected` → `FORGE: paused` → the unit goes back to pending → ppar starts it again from scratch (25 abandoned runs, $42) | Pause = wait for `resetsAt` from `rate_limit_event` and continue the same session/stage; do not create a new run | `forge_run.py:391 session()` (RateLimited), `ppar.py` (pending handling) | −10%, no lost work |
+| 3 | Unbounded retries: U05 ×6, U07 ×5, U04 ×4; $68 went to retries of units that later merged | At most 2 runs per unit, then `needs-human`; on retry pass `.forge/disputes.md` and the reason for the previous failure | `ppar.py` / `queue_run.py` | −10–15% |
+| 4 | A fix round changes nothing in the tree (19 times), yet the unit is still restarted | "no change to the tree" → straight to `needs-answer` with the question from disputes, no retry | `forge_run.py` (fix loop) | fewer empty runs |
+| 5 | Everything on Opus, including build/fix (46% $) | Separate `model_build` / `model_fix` parameters (Sonnet), keep Opus for plain-tests | `queue_run.py:426`, `forge_run.py --model` | −15–18% (watch the number of fix rounds) |
+| 6 | `--resume` drags context through tests → cover → build → fix (120K → 245K) | build/fix — a new session with a short handoff: diff + red gate + error tail | `forge_run.py` | −5–10% |
+| 7 | `dotnet restore` on every worktree — 2.5 h of 28.6 | Shared NuGet cache (`NUGET_PACKAGES`) / restore once in the int-worktree and hardlink `obj` | `ppar.py` / `setup` in `powerpuff.yaml` | −9% time |
+| 8 | Parallelism of 4 hits the 5-hour limit: effectively ~2.5 units at once | First items 1–6 (fewer tokens → the limit lasts longer); then auto-throttle: lower MAXPAR on `allowed_warning` | `ppar.py` | steady pace |
+| 9 | ppar.py is a homegrown wrapper in `vetal_project/.powerpuff/`, not in the plugin | Move parallel waves (int-branch, merge, MAXPAR) into the plugin (`queue_run.py --parallel N`) | plugin | one integration for all projects |
+| 10 | Headless sessions inherit the entire user environment (11 plugins, 3 MCP, mem0/telemetry hooks) — the system part is only ~12K, but extra hooks and `ToolSearch` | `--strict-mcp-config` without MCP, `POWERPUFF_DRIVER=1` → silence the mem0/telemetry hooks | `forge_run.py:397` | minor, hygiene |
 
-Ожидаемо по сумме: ≈ −60% токенов. Скорость — минус 6 ч пауз и ~2.5 ч restore, плюс быстрее каждый вызов.
+Expected in total: ≈ −60% tokens. Speed — minus 6 h of pauses and ~2.5 h of restore, plus each call is faster.
 
-## Почему медленно (кратко)
-- Упор в 5-часовой лимит: 21% юнит-времени — паузы, два окна по 1–2 ч без прогресса вообще.
-- Брошенные и повторные запуски: 42 лишних запуска сверх 39 смерженных юнитов.
-- Каждая сессия тянет ~100K лишнего контекста → вызовы медленнее.
-- Тяжёлые .NET-гейты: restore, build `-warnaserror`, тесты с coverage на каждый юнит.
-- Темп: 39 юнитов за 11.5 ч ≈ 3.4 юнита в час; осталось 25.
+## Why it is slow (short)
+- Hitting the 5-hour limit: 21% of unit time is pauses, two windows of 1–2 h with no progress at all.
+- Abandoned and repeated runs: 42 extra runs on top of 39 merged units.
+- Every session drags ~100K of excess context → calls are slower.
+- Heavy .NET gates: restore, build `-warnaserror`, tests with coverage on every unit.
+- Pace: 39 units in 11.5 h ≈ 3.4 units per hour; 25 left.
 
-## Перезапуск vetal_project после рефакторинга
-- Остановить текущий ppar (PID 28396 `ppar.py queue.yaml 4` и дочерние `queue_run.py`) — или дождаться, пока он сам закончит.
-- База — `ppar/integration` (int-worktree `.powerpuff/ppar/int`); merged юниты пропускать по `ppar-main.log` / state.
-- Сначала добить running (U33, U39, U42, U53) и U01, потом 20 не начатых.
-- Проверить, что `powerpuff.yaml` совместим с новой версией плагина (gates, `test_gates`, protected).
-- Обновить кэш плагина: `C:/Users/suhor/.claude/plugins/cache/powerpuff/powerpuff/<ver>` (ppar.py захардкодил `0.2.0` в PLUGIN).
+## Restarting vetal_project after the refactor
+- Stop the current ppar (PID 28396 `ppar.py queue.yaml 4` and child `queue_run.py`) — or wait until it finishes by itself.
+- Base — `ppar/integration` (int-worktree `.powerpuff/ppar/int`); skip merged units per `ppar-main.log` / state.
+- First finish the running ones (U33, U39, U42, U53) and U01, then the 20 not started.
+- Check that `powerpuff.yaml` is compatible with the new plugin version (gates, `test_gates`, protected).
+- Update the plugin cache: `C:/Users/suhor/.claude/plugins/cache/powerpuff/powerpuff/<ver>` (ppar.py hardcoded `0.2.0` in PLUGIN).
 
-## Скрипты анализа: `C:/Work/notes/powerpuff-usage-scripts/`
-`agg.py` (расход по транскриптам), `stages.py`/`stages2.py` (по стадиям из логов), `time.py` (время по фазам) — логику при необходимости перенести в `powerpuff/scripts/run_report.py`.
+## Analysis scripts: `C:/Work/notes/powerpuff-usage-scripts/`
+`agg.py` (usage by transcripts), `stages.py`/`stages2.py` (by stage from logs), `time.py` (time by phase) — move the logic to `powerpuff/scripts/run_report.py` if needed.
 
-## Итог (0.3.0, 2026-11-22)
-| # | Статус |
+## Outcome (0.3.0, 2026-11-22)
+| # | Status |
 |---|---|
-| 1 | сделано: `scripts/spec_slice.py`, на vetal 211K → ~14K символов на юнит (среднее по 64 юнитам); проверка покрытия просит только id юнита |
-| 2 | сделано; причина оказалась другой: сообщение «You've hit your 5-hour limit» классифицировалось как «API unreachable» (24 паузы `FORGE: paused (API unreachable)`); теперь `rate_limit_event` `rejected` → ожидание `resetsAt` и та же стадия |
-| 3 | сделано: `max_attempts` (2), повтор с причиной и `disputes.md`; повтор и при merge-конфликте |
-| 4 | сделано: `stuck:` → `needs-answer`, продолжение с `plain-build` |
-| 5 | сделано: `model_build` / `model_fix` (queue, профиль, CLI); последний фикс-раунд эскалируется на `model` |
-| 6 | сделано: build — новая сессия; fix продолжает build, при смене модели — новая сессия с короткой передачей дел |
-| 7 | заменено: restore занимал ~4 с на юнит (10 мин за ночь), 9% «setup» — это base check всех гейтов; теперь кеш зелёных деревьев (`verified_trees`), setup выполняется всё равно; в vetal убран дублирующий гейт `tests` (его покрывает `coverage`) |
-| 8 | сделано: слоты по загрузке 5-часового окна (`<run>/rate.json`) |
-| 9 | сделано: `queue_run.py --parallel N` / `parallel`, `already_merged`, `budget.unit_usd`; `ppar.py` больше не нужен |
-| 10 | частично: `--strict-mcp-config`; mem0/telemetry-хуки пользователя не тронуты (их нужно глушить по `POWERPUFF_DRIVER=1` в самих хуках) |
+| 1 | done: `scripts/spec_slice.py`, on vetal 211K → ~14K characters per unit (average over 64 units); the coverage check asks for the unit id only |
+| 2 | done; the cause turned out to be different: the message "You've hit your 5-hour limit" was classified as "API unreachable" (24 pauses `FORGE: paused (API unreachable)`); now `rate_limit_event` `rejected` → wait for `resetsAt` and the same stage |
+| 3 | done: `max_attempts` (2), retry with the reason and `disputes.md`; also retry on merge conflict |
+| 4 | done: `stuck:` → `needs-answer`, continue from `plain-build` |
+| 5 | done: `model_build` / `model_fix` (queue, profile, CLI); the last fix round is escalated to `model` |
+| 6 | done: build — new session; fix continues build, on model change — a new session with a short handoff |
+| 7 | replaced: restore took ~4 s per unit (10 min per night), the 9% "setup" is the base check of all gates; now a cache of green trees (`verified_trees`), setup still runs; in vetal the duplicate `tests` gate was removed (`coverage` covers it) |
+| 8 | done: slots by 5-hour window load (`<run>/rate.json`) |
+| 9 | done: `queue_run.py --parallel N` / `parallel`, `already_merged`, `budget.unit_usd`; `ppar.py` is no longer needed |
+| 10 | partial: `--strict-mcp-config`; the user's mem0/telemetry hooks untouched (they must be silenced on `POWERPUFF_DRIVER=1` in the hooks themselves) |
