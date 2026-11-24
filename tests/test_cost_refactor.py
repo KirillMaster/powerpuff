@@ -97,14 +97,15 @@ def test_profile_model_build(tmp_path: Path) -> None:
 
 
 def test_fix_round_without_change_is_stuck_and_resumable(h: PH) -> None:
-    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD}, "default"]})
+    h.scenario({"pbuild": [{"base": True, "write": BAD}],
+                "fix": [{"base": True, "write": BAD}, {"base": True, "write": BAD}, "default"]})
     r = h.run()
     assert r.rc == 1 and FINAL(r.out) == "FORGE: failed"
     assert "stuck: fix round 1 changed nothing" in h.report()
     assert h.state()["stage"] == "plain-build"
     r2 = h.run()
     assert r2.rc == 0, r2.err
-    assert h.stages() == ["ptests", "pbuild", "fix", "fix"]
+    assert h.stages() == ["ptests", "pbuild", "fix", "fix", "fix"]  # round 1, its escalation, the round after the rerun
 
 
 def test_skip_base_check_still_runs_setup(tmp_path: Path) -> None:
@@ -190,6 +191,12 @@ def test_failed_unit_gets_a_second_attempt_with_the_reason(tmp_path: Path) -> No
     assert v["status"] == "merged" and v["attempts"] == 1 and v["history"][0]["reason"]
     assert (qh.run_dir / "forge" / "U1.attempt1").is_dir()
     assert "attempt 2/2" in r.out
+    s = qh.summary()  # the failed first attempt was paid for: it is in the unit's and the run's cost
+    one = v["spent_before"]
+    assert one > 0 and s["cost"]["total_usd"] == pytest.approx(one + v["cost"]["total_usd"])
+    assert sum(s["cost"]["by_model"].values()) == pytest.approx(s["cost"]["total_usd"])
+    row = next(u for u in s["units"] if u["id"] == "U1")
+    assert row["cost_all_attempts"] == pytest.approx(s["cost"]["total_usd"])
 
 
 def test_attempts_exhausted_needs_a_human(tmp_path: Path) -> None:

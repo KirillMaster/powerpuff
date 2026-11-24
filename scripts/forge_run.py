@@ -169,6 +169,10 @@ Before coding:
     requirement in the test name or a comment, assert exact values from the spec; the tests must be collectable and
     fail until the spec is implemented. List every new test file in `.forge/acceptance-files.txt`, one repo-relative
     path per line.
+(c) Prove the tests are red: run TEST_RUN and confirm every new acceptance test FAILS on the current tree because
+    the behaviour is missing (an assertion or a missing entry point, not a syntax or collection error). A test that
+    already passes asserts nothing new: tighten it (exact values from the spec) until it fails. The driver checks
+    this too and a vacuous suite costs another round.
 Then stop: no production code. Finish with one line: TESTS: done
 
 SPEC:
@@ -989,7 +993,34 @@ class Run:
         return {"ok": g["ok"], "violations": g["violations"][:20], "counts": g["counts"], "tests": g["tests"],
                 "unknown_extensions": g["unknown_extensions"]}
 
+    def tree_key(self) -> str:
+        """Identity of the tree the gates would see: HEAD, the dirty paths (with mtime and size) and the gate set."""
+        h = hashlib.sha256(self.git("rev-parse", "HEAD").encode())
+        for ln in sorted(self.git("status", "--porcelain", "-uall", "--", ".", ":!.forge").splitlines()):
+            path = re.sub(r"^\S{1,2}\s+", "", ln.strip()).rsplit(" -> ", 1)[-1].strip('"')  # git() strips line 1
+            try:
+                st = (self.root / path).stat()
+                stamp = f"{st.st_mtime_ns}:{st.st_size}"
+            except OSError:
+                stamp = "-"
+            h.update(f"{ln}\0{stamp}\0".encode())
+        h.update(json.dumps(self.state.get("gates") or {}, sort_keys=True).encode())
+        return h.hexdigest()
+
     def check(self) -> dict:
+        """forge_check on the current tree; the same tree is never checked twice in one process (a no-change fix
+        round and `finish` right after a check reuse the last result instead of re-running every gate)."""
+        key = self.tree_key()
+        cached = getattr(self, "_check_cache", None)
+        if cached and cached[0] == key:
+            rep = json.loads(json.dumps(cached[1]))
+            self.log(f"check: tree unchanged since the last check, result reused (done={rep['done']})")
+            return rep
+        rep = self.run_check()
+        self._check_cache = (self.tree_key(), json.loads(json.dumps(rep)))
+        return rep
+
+    def run_check(self) -> dict:
         gates_tampered = self.restore_gate_config()
         files = forge_check.frozen_files(self.root)
         tampered = forge_check.check_frozen(self.root, files)["changed_or_missing"]
@@ -1146,7 +1177,11 @@ class Run:
     def plain_tests(self) -> None:
         before = self.plain_before()
         if not self.state.get("plain_turn1"):
-            out = self.plain_turn("plain-tests", PLAIN_TESTS + (self.forge / "spec.md").read_text(encoding="utf-8"),
+            ctx = self.gate_ctx()
+            runs = [f"`{forge_check.expand(c, ctx)}`" for c in self.test_gates().values()]
+            test_run = " and ".join(runs) if runs else "the repo's test command for the new files"
+            out = self.plain_turn("plain-tests", PLAIN_TESTS.replace("TEST_RUN", test_run)
+                                  + (self.forge / "spec.md").read_text(encoding="utf-8"),
                                   lambda: bool(self.plain_new_tests(before)))
             self.keep_additive("plain-tests", before)
             req_path = self.forge / "requirements.md"
@@ -1250,6 +1285,14 @@ class Run:
             self.commit(f"forge(plain-fix{rnd + 1})")
             self.state["plain_round"] = rnd + 1
             self.save()
+            if self.git("rev-parse", "HEAD") == head and not self.state.get("stuck_escalated"):
+                # a resumed session that changed nothing often just agrees with itself: one fresh session with the
+                # main model, the gate output and the disputes gets a try before a human is asked
+                self.state["stuck_escalated"] = True
+                self.save()
+                self.log(f"plain-fix{rnd + 1}: no change to the tree - one escalation round in a fresh session")
+                self.fix_round(rnd + 1, rep, escalate=True)
+                self.commit(f"forge(plain-fix{rnd + 1}-esc)")
             if self.git("rev-parse", "HEAD") == head:
                 self.log(f"plain-fix{rnd + 1}: no change to the tree - stuck, needs a human (see .forge/disputes.md)")
                 if self.check()["done"]:
@@ -1263,21 +1306,27 @@ class Run:
         self.state["stage"] = "accept"
         self.save()
 
-    def fix_round(self, n: int, rep: dict) -> None:
+    def fix_round(self, n: int, rep: dict, escalate: bool = False) -> None:
         """Fix rounds continue the build session while the model stays the same; a different `model_fix` or the
-        escalation of the last round (to the main model) starts a fresh session with a short handoff instead."""
+        escalation of the last round (to the main model) starts a fresh session with a short handoff instead.
+        `escalate` (a round that changed nothing): fresh session, main model, disputes in the prompt."""
         model = self.model_for("fix")
-        if n >= self.a.max_fix_rounds and n > 1 and model != self.a.model:
+        if escalate or n >= self.a.max_fix_rounds and n > 1 and model != self.a.model:
+            if model != self.a.model:
+                self.log(f"plain-fix{n}: escalation to {self.a.model}")
             model = self.a.model
-            self.log(f"plain-fix{n}: escalation to {model}")
-        sid = self.state.get("sid_build") if self.state.get("sid_build_model") == model else None
+        sid = None if escalate else self.state.get("sid_build") if self.state.get("sid_build_model") == model else None
         disputes = self.forge / "disputes.md"
         note = ("\n\nThe previous round changed nothing. Disputes on record (decide them against the spec; human "
                 "decisions below win):\n" + disputes.read_text(encoding="utf-8")[-3000:]) \
-            if self.state.get("max_rounds_extra") and disputes.is_file() else ""
+            if (escalate or self.state.get("max_rounds_extra")) and disputes.is_file() else ""
+        if escalate:
+            note += ("\n\nThe previous session ended without changing anything although the check is red. Look at the "
+                     "failing gate output yourself, find the root cause and fix it in the code (never in the frozen "
+                     "tests or the gate config).")
         brief = FIX_OUTPUT + failure_brief(rep) + note + self.human_decisions()
         prompt = FIX + brief if sid else FIX + self.fix_handoff() + brief
-        out = self.staged(f"plain-fix{n}", model, prompt, lambda: True, resume=sid)
+        out = self.staged(f"plain-fix{n}{'-esc' if escalate else ''}", model, prompt, lambda: True, resume=sid)
         if out.get("session_id"):
             self.state.update(sid_build=out["session_id"], sid_build_model=model)
             self.save()

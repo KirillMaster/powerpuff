@@ -208,6 +208,12 @@ def render_command(cmd: str, p: Project, plugin: str | None, scoped: bool = True
     return f"cd {p.rel} && {cmd}"
 
 
+def rooted(cmd: str) -> str:
+    """`cd <rel> && x` -> `cd "{root}/<rel>" && x`: joined setup/format_fix steps must not inherit the previous step's
+    directory, and cmd.exe (shell=True on Windows) does not isolate `cd` inside parentheses."""
+    return re.sub(r"^cd (\S+) && ", lambda m: f'cd "{{root}}/{m.group(1)}" && ', cmd)
+
+
 def build(root: Path, projects: list[Project], plugin: str | None = None) -> dict:
     pre = prefixes(projects)
     gates: dict[str, list[str]] = {t: [] for t in TIERS}
@@ -241,10 +247,10 @@ def build(root: Path, projects: list[Project], plugin: str | None = None) -> dic
                     test_gates.append(name)
         fix = p.preset.get("format_fix")
         if isinstance(fix, str) and not (needs.get("format_fix") and p.missing(str(needs["format_fix"]))):
-            fixes.append(render_command(fix, p, plugin))
+            fixes.append(rooted(render_command(fix, p, plugin)))
         setup = p.preset.get("setup")
         if isinstance(setup, str) and not (needs.get("setup") and p.missing(str(needs["setup"]))):
-            setups.append(render_command(setup, p, plugin))
+            setups.append(rooted(render_command(setup, p, plugin)))
         for g in listing(p.preset.get("protected")):
             for item in ([g] if not p.rel else [f"{p.rel}/{g}", g]):
                 if item not in protected:

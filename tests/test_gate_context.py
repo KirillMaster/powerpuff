@@ -92,7 +92,7 @@ def test_forge_base_and_unit_checks_get_context(tmp_path: Path) -> None:
     assert r.rc == 0, r.err
     rows = lines(log)
     start = h.state()["start_sha"]
-    assert len(rows) >= 3 and all(b == e == start and rt == ro == posix(h.repo) for b, e, rt, ro in rows)
+    assert len(rows) >= 2 and all(b == e == start and rt == ro == posix(h.repo) for b, e, rt, ro in rows)
     assert rows[0][0] == start
 
 

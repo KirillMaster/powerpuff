@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.2
+Speed and cost fixes from the 2026-11-23/24 queue runs (6 runs, 179 sessions, $178 notional, 1 809 unit-minutes: sessions 50%, gate checks 30%, red-on-base 9%).
+- forge_run: the same tree is never checked twice in one process. A fix round that changed nothing and `finish` right after a check reuse the last `forge_check` result instead of re-running every gate (57 duplicate checks, 172 min in those runs).
+- plain engine: a fix round that changes nothing first gets one escalation round in a fresh session with the main model, the gate output and the disputes; only a second no-change round ends as `stuck` (41 stuck rounds in those runs, each waiting for a human).
+- plain engine: turn 1 runs the test gates itself and must see every new acceptance test fail before it finishes (36 vacuous suites cost an extra session and an extra test run each).
+- queue_run: `SUMMARY.md` / `summary.json` count the cost of failed earlier attempts (archived by a retry) per unit and per model; before, only the last attempt was counted (one run showed $51 instead of $90).
+- Gates run with UTF-8 stdio (`PYTHONUTF8=1`) so Python tools do not crash on a cp1252 console; profile `setup` / `format_fix` steps of a monorepo `cd` from `{root}` instead of the previous step's directory.
+
 ## 0.3.1
 English translation of docs, prompts and messages.
 

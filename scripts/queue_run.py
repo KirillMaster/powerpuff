@@ -679,6 +679,9 @@ class Queue:
                      "disputes": disputes.read_text(encoding="utf-8")[:3000] if disputes.is_file() else ""})
         v["attempts"] = done
         v["spent_before"] = round(float(v.get("spent_before") or 0) + float((v.get("cost") or {}).get("total_usd") or 0), 4)
+        prev_models = v.setdefault("spent_before_by_model", {})
+        for m, x in ((v.get("cost") or {}).get("by_model") or {}).items():
+            prev_models[m] = round(float(prev_models.get(m, 0)) + float(x), 4)
         v["cost"] = None
         self.snapshot(uid, wt, f"{uid}.attempt{done}")
         self.save()  # the next attempt gets a new branch and worktree name (suffix -a<n>); the old ones go best-effort
@@ -820,10 +823,13 @@ class Queue:
         infos = [self.unit_info(u["id"]) for u in self.cfg["units"]]
         by_model: dict[str, float] = {}
         total = 0.0
-        for i in infos:
-            total += float((i.get("cost") or {}).get("total_usd") or 0)
-            for m, x in ((i.get("cost") or {}).get("by_model") or {}).items():
-                by_model[m] = round(by_model.get(m, 0) + float(x), 4)
+        for i in infos:  # failed earlier attempts (archived by retry) count too: they were paid for
+            unit_usd = float((i.get("cost") or {}).get("total_usd") or 0) + float(i.get("spent_before") or 0)
+            i["cost_all_attempts"] = round(unit_usd, 4)
+            total += unit_usd
+            for src in ((i.get("cost") or {}).get("by_model") or {}, i.get("spent_before_by_model") or {}):
+                for m, x in src.items():
+                    by_model[m] = round(by_model.get(m, 0) + float(x), 4)
         audit = [i["id"] for i in infos if i["status"] == "done"]
         blocked = [{"id": i["id"], "reason": i["reason"]} for i in infos if i["status"] == "blocked"]
         asks = [{"id": i["id"], "reason": i["reason"]} for i in infos if i["status"] == "needs-answer"]
@@ -841,7 +847,7 @@ class Queue:
                  f"- elapsed: {data['elapsed_min']} min", "",
                  "| unit | status | risk | cost | min | branch | reason |", "|---|---|---|---|---|---|---|"]
         for i in infos:
-            lines.append(f"| {i['id']} | {i['status']} | {i['risk']} | {(i.get('cost') or {}).get('total_usd', 0)} | "
+            lines.append(f"| {i['id']} | {i['status']} | {i['risk']} | {i['cost_all_attempts']} | "
                          f"{i['minutes']} | `{i['branch']}` | {cell(i['reason'])} |")
         lines += ["", "## Awaiting audit", *([f"- {x}: `{self.u(x)['branch']}`" for x in audit] or ["none"]), "",
                   "## Needs answer", *([f"- {b['id']}: {b['reason']}" for b in asks] or ["none"]), "",

@@ -121,7 +121,7 @@ def test_resume_after_the_check_does_not_repeat_it(h: Harness) -> None:
     (h.repo / ".forge" / "state.json").write_text(json.dumps(st), encoding="utf-8")
     r = h.run("Build foo")
     assert r.rc == 0, r.err
-    assert runs(h) == 3  # one check after the build round and one at the end, no second red-on-base run
+    assert runs(h) == 2  # one check after the build round (the end reuses it), no second red-on-base run
     assert "vacuous" not in h.stages()
 
 
@@ -133,6 +133,6 @@ def test_older_state_without_the_key_is_unknown_and_runs_no_check(h: Harness) ->
     (h.repo / ".forge" / "state.json").write_text(json.dumps(st), encoding="utf-8")
     r = h.run("Build foo")
     assert r.rc == 0, r.err
-    assert runs(h) == 3
+    assert runs(h) == 2  # the build check; the end reuses it on the unchanged tree
     assert "red_on_base" not in h.state()
     assert LINE + "unknown" in h.report()

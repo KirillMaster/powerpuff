@@ -176,7 +176,7 @@ def test_monorepo_prefixes_and_cd_scoped_commands(tmp_path, monkeypatch, capsys)
     assert prof["gates"]["web-tests"] == "cd web && npm run test"
     assert [g for g in prof["gates"] if g.endswith("duplication") or g.endswith("size")] == ["duplication", "size"]
     assert "cd " not in prof["gates"]["duplication"]
-    assert prof["format_fix"] == "cd svc && gofmt -w ."
+    assert prof["format_fix"] == 'cd "{root}/svc" && gofmt -w .'
     assert "svc/.golangci.yml" in out and "web/tsconfig*.json" in out
 
 

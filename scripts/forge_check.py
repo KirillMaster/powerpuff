@@ -72,9 +72,12 @@ def expand(cmd: str, context: dict[str, str] | None) -> str:
 
 
 def context_env(context: dict[str, str] | None) -> dict[str, str] | None:
+    """Gate environment: the POWERPUFF_* context plus UTF-8 stdio for Python tools (lizard, diff_gates), which
+    otherwise crash with UnicodeEncodeError on a cp1252 Windows console when a path or message is non-ASCII."""
+    utf8 = {"PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     if not context:
-        return None
-    return {**os.environ, "POWERPUFF_BASE": context.get("base", ""), "POWERPUFF_ROOT": context.get("root", ""),
+        return {**os.environ, **utf8}
+    return {**os.environ, **utf8, "POWERPUFF_BASE": context.get("base", ""), "POWERPUFF_ROOT": context.get("root", ""),
             "POWERPUFF_PLUGIN": context.get("plugin", "")}
 
 

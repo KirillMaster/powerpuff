@@ -236,7 +236,27 @@ def test_fix_round_without_change_stops_early(h: PH) -> None:
     h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD}]})
     r = h.run()
     assert r.rc == 1 and FINAL(r.out) == "FORGE: failed"
-    assert h.stages().count("fix") == 1 and "stuck: fix round 1 changed nothing" in h.report()
+    # the no-change round + one escalation round in a fresh session, then stuck
+    assert h.stages().count("fix") == 2 and "stuck: fix round 1 changed nothing" in h.report()
+    _, esc = h.of("fix")
+    assert not esc["has_resume"] and "ended without changing anything" in esc["prompt"]
+    # the stuck check and `finish` reuse the last check on the unchanged tree
+    assert "result reused" in (h.repo / ".forge" / "progress.md").read_text(encoding="utf-8")
+
+
+def test_escalation_round_can_unstick_the_build(h: PH) -> None:
+    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD}, "default"]})
+    r = h.run()
+    assert r.rc == 0, r.err
+    assert h.stages() == ["ptests", "pbuild", "fix", "fix"]
+    f1, esc = h.of("fix")
+    assert f1["has_resume"] and not esc["has_resume"] and esc["model"] == "strong"
+
+
+def test_turn1_prompt_asks_to_prove_the_tests_red(h: PH) -> None:
+    assert h.run().rc == 0
+    p = h.of("ptests")[0]["prompt"]
+    assert "Prove the tests are red" in p and "TEST_RUN" not in p
 
 
 def test_resumed_session_cost_counts_only_the_increment(h: PH) -> None:
