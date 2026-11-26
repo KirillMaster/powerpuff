@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.5
+- forge_check: frozen tests are compared ignoring line endings (LF/CRLF): a worktree on a host with core.autocrlf=true restored a tampered frozen test as CRLF, its sha never matched and every check failed - false "stuck" on a valid tree (vetal U15/U27).
+- forge_run: a check that restored a tampered frozen test is not cached, the restored tree is checked afresh next time.
+
 ## 0.3.4
 - forge_run: the inner loop is ON by default - without an `inner_loop` key in the profile the build/fix sessions iterate on the test gates only (`test_gates`, or gates named *test*) and the driver runs the full gate set. `inner_loop: off` restores the old behaviour (the session runs every gate). Profiles without test gates keep the plain gate list.
 

@@ -35,11 +35,18 @@ def frozen_files(root: Path) -> dict[str, str]:
     return out
 
 
+def eol_digests(data: bytes) -> set[str]:
+    """sha256 of the bytes as they are, with LF and with CRLF line endings: a checkout on a host with
+    core.autocrlf=true rewrites line endings, which is not an edit of a frozen test."""
+    lf = data.replace(b"\r\n", b"\n")
+    return {hashlib.sha256(b).hexdigest() for b in (data, lf, lf.replace(b"\n", b"\r\n"))}
+
+
 def check_frozen(root: Path, files: dict[str, str]) -> dict:
     bad = []
     for rel, digest in files.items():
         p = root / rel
-        if not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest() != digest:
+        if not p.is_file() or digest not in eol_digests(p.read_bytes()):
             bad.append(rel)
     return {"ok": bool(files) and not bad, "files": len(files), "changed_or_missing": bad}
 

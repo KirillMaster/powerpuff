@@ -1031,7 +1031,9 @@ class Run:
             self.log(f"check: tree unchanged since the last check, result reused (done={rep['done']})")
             return rep
         rep = self.run_check()
-        self._check_cache = (self.tree_key(), json.loads(json.dumps(rep)))
+        # a check that restored a tampered frozen test reports frozen=False for a tree that no longer exists: the
+        # restored tree must be checked afresh next time, otherwise a no-change fix round reuses the stale failure
+        self._check_cache = None if rep.get("frozen_restored") else (self.tree_key(), json.loads(json.dumps(rep)))
         return rep
 
     def run_check(self) -> dict:
@@ -1052,6 +1054,7 @@ class Run:
         if tampered:
             rep["frozen"] = {"ok": False, "files": len(files), "changed_or_missing": tampered,
                              "note": "restored from git; frozen acceptance tests must not be edited"}
+            rep["frozen_restored"] = True
         if gates_tampered:
             rep["gates_tampered"] = True
         rep["done"] = all(rep[k]["ok"] for k in ("coverage", "frozen", "gates", "guard")) and not gates_tampered

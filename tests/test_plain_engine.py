@@ -212,6 +212,15 @@ def test_frozen_test_edited_in_build_is_restored_and_counted(h: PH) -> None:
     assert "frozen test violations (restored from git): 1" in h.report()
 
 
+def test_frozen_test_with_rewritten_line_endings_is_not_a_violation(h: PH) -> None:
+    # a worktree on a host with core.autocrlf=true sees the frozen tests with CRLF: not an edit
+    h.scenario({"pbuild": [{"base": True, "write": {"tests/test_acceptance.py": TEST_FILE.replace("\n", "\r\n")}}]})
+    r = h.run()
+    assert r.rc == 0, r.err
+    assert h.stages() == ["ptests", "pbuild"]
+    assert not h.state().get("frozen_violations")
+
+
 def test_red_gates_resume_fix_rounds_until_green(h: PH) -> None:
     h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": [{"base": True, "write": BAD, "append": {"notes.txt": "x"}}, "default"]})
     r = h.run()
