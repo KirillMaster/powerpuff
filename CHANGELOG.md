@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3
+Speed fixes from the 2026-11-26 vetal_project audit (sessions waited 72% of their time on their own full-coverage runs: 113 runs x 4.4 min; A/B on unit U13: 53.6 -> 15.6 min, same gates and test count).
+- forge_run: profile key `inner_loop` - a fast targeted check the build/fix sessions iterate on; the full gates are run only by the driver's check (before: the prompt told the model to run every gate until green, then check re-ran them).
+- queue_run: `base is red` no longer spends an attempt: the unit waits for a new integration tip (up to 15 min, 3 times) and starts again from a fresh worktree.
+
 ## 0.3.2
 Speed and cost fixes from the 2026-11-23/24 queue runs (6 runs, 179 sessions, $178 notional, 1 809 unit-minutes: sessions 50%, gate checks 30%, red-on-base 9%).
 - forge_run: the same tree is never checked twice in one process. A fix round that changed nothing and `finish` right after a check reuse the last `forge_check` result instead of re-running every gate (57 duplicate checks, 172 min in those runs).
