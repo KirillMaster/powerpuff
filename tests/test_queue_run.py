@@ -433,6 +433,29 @@ def test_crash_is_retried_once(h: QH, monkeypatch: pytest.MonkeyPatch, always: b
         assert rc == 0 and h.statuses() == {"U1": "merged"}
 
 
+@pytest.mark.parametrize("reds", [1, 5])
+def test_red_base_waits_for_new_tip_without_spending_an_attempt(h: QH, monkeypatch: pytest.MonkeyPatch, reds: int) -> None:
+    orig, calls, slept = queue_run.Queue.forge_cmd, [], []
+    red = [sys.executable, "-c", "print('FORGE: failed base is red: coverage'); raise SystemExit(1)"]
+
+    def cmd(self, spec, wt, cap):
+        calls.append(1)
+        return red if len(calls) <= reds else orig(self, spec, wt, cap)
+    monkeypatch.setattr(queue_run.Queue, "forge_cmd", cmd)
+    monkeypatch.setattr(queue_run, "sleep", slept.append)
+    for k, v in h.env().items():
+        monkeypatch.setenv(k, v)
+    rc = queue_run.main([str(h.queue([unit("U1")])), "--repo", str(h.repo)])
+    u = h.state()["units"]["U1"]
+    waits = queue_run.Queue.RED_BASE_WAITS
+    assert u["red_base_waits"] == min(reds, waits) and int(u.get("attempts") or 0) == (0 if reds <= waits else 1)
+    assert sum(slept) == min(reds, waits) * queue_run.Queue.RED_BASE_WAIT_S
+    if reds <= waits:
+        assert rc == 0 and h.statuses() == {"U1": "merged"} and len(calls) == reds + 1
+    else:
+        assert rc == 1 and h.statuses() == {"U1": "failed"} and "base is red" in u["reason"]
+
+
 def test_budget_exhaustion_skips_remaining(h: QH) -> None:
     q = h.queue([unit("U1"), unit("U2"), unit("U3")], budget={"max_usd": 3, "max_hours": 0.5})
     r = h.run(q)

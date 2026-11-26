@@ -57,6 +57,21 @@ def test_profile_used_and_auditor_not_asked_for_gates(h: Harness) -> None:
     assert GATE in next(c for c in h.calls() if c["stage"] == "implement")["prompt"]
 
 
+def test_inner_loop_replaces_gates_in_the_session_prompt(h: Harness) -> None:
+    put_profile(h, profile(extra="inner_loop: 'python -c \"pass\"'\n"))
+    r = h.run("Build foo")
+    assert r.rc == 0, r.err
+    impl = next(c for c in h.calls() if c["stage"] == "implement")["prompt"]
+    assert "inner loop (YOU run this one, it is fast): `python -c \"pass\"`" in impl
+    assert "do not run them yourself" in impl and GATE in impl
+
+
+def test_no_inner_loop_keeps_plain_gate_list(h: Harness) -> None:
+    put_profile(h, profile())
+    assert h.run("Build foo").rc == 0
+    assert "inner loop" not in next(c for c in h.calls() if c["stage"] == "implement")["prompt"]
+
+
 def test_missing_command_fails_before_any_session(h: Harness) -> None:
     put_profile(h, profile(gates="  iteration: [unit, lint]\n"))
     r = h.run("Build foo")

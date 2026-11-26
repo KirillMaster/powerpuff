@@ -308,7 +308,8 @@ def load_profile(root: Path, path: Path | None = None) -> dict | None:
     approved = cfg.get("approved") is True or str(cfg.get("approved")).strip().lower() == "true"
     return {"approved": approved, "gates": {i: cmds[i] for i in ids}, "final": lists.get("final", []),
             "final_gates": {i: cmds[i] for i in lists.get("final", [])},
-            "format_fix": str(cfg["format_fix"]) if cfg.get("format_fix") else None, "config": cfg}
+            "format_fix": str(cfg["format_fix"]) if cfg.get("format_fix") else None,
+            "inner_loop": str(cfg["inner_loop"]) if cfg.get("inner_loop") else None, "config": cfg}
 
 
 def failure_brief(rep: dict, limit: int = 8000) -> str:
@@ -1048,11 +1049,22 @@ class Run:
         return rep
 
     def build_prompt(self) -> str:
-        ctx = self.gate_ctx()
-        gates = "\n".join(f"  - {n}: `{forge_check.expand(c, ctx)}`" for n, c in (self.state.get("gates") or {}).items())
-        fmt = forge_check.expand(str(self.state.get("format_fix") or "none"), ctx)
+        gates, fmt = self.gate_lines()
         return BUILD.replace("FORMAT_FIX", fmt).replace("GATES", gates) \
             + self.human_decisions()
+
+    def inner_loop(self) -> str | None:
+        """Profile `inner_loop`: a fast targeted check the session iterates on; the full gates run only in the driver."""
+        if self.state.get("gates_source") != "profile":
+            return None
+        cmd = (self.profile or {}).get("inner_loop")
+        return forge_check.expand(cmd, self.gate_ctx()) if cmd else None
+
+    def inner_note(self) -> str:
+        inner = self.inner_loop()
+        return (f"\nIteration: run only the fast inner loop `{inner}` (and the formatter in fix mode) until it exits 0. "
+                "Do NOT run the full gates yourself: the harness runs them right after you finish and sends any failure "
+                "back to you.\n") if inner else ""
 
     def build_loop(self, stage: str, prompt: str, rounds: int) -> bool:
         if self.uncovered():  # e.g. a run resumed from an older state
@@ -1072,7 +1084,7 @@ class Run:
             self.save()
             if rep["done"]:
                 return True
-            prompt = FIX + FIX_OUTPUT + failure_brief(rep)
+            prompt = FIX + self.inner_note() + FIX_OUTPUT + failure_brief(rep)
             if not sid:
                 prompt = self.build_prompt() + "\n\n" + prompt
         if self.state["writer"] != self.a.model and not self.state.get(f"esc_{stage}"):
@@ -1220,6 +1232,10 @@ class Run:
     def gate_lines(self) -> tuple[str, str]:
         ctx = self.gate_ctx()
         gates = "\n".join(f"  - {n}: `{forge_check.expand(c, ctx)}`" for n, c in (self.state.get("gates") or {}).items())
+        inner = self.inner_loop()
+        if inner:
+            gates = (f"  - inner loop (YOU run this one, it is fast): `{inner}`\n"
+                     "  The gates below are run by the harness after you finish - do not run them yourself:\n" + gates)
         return gates, forge_check.expand(str(self.state.get("format_fix") or "none"), ctx)
 
     def frozen_lines(self) -> str:
@@ -1325,7 +1341,7 @@ class Run:
                      "failing gate output yourself, find the root cause and fix it in the code (never in the frozen "
                      "tests or the gate config).")
         brief = FIX_OUTPUT + failure_brief(rep) + note + self.human_decisions()
-        prompt = FIX + brief if sid else FIX + self.fix_handoff() + brief
+        prompt = FIX + self.inner_note() + (brief if sid else self.fix_handoff() + brief)
         out = self.staged(f"plain-fix{n}{'-esc' if escalate else ''}", model, prompt, lambda: True, resume=sid)
         if out.get("session_id"):
             self.state.update(sid_build=out["session_id"], sid_build_model=model)

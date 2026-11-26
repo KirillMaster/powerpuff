@@ -596,6 +596,11 @@ class Queue:
                 return "ok"
             if rc == 1:
                 why = self.fail_reason(wt, out, rc)
+                if "base is red" in why and self.wait_green_base(uid, wt, why):
+                    wt = self.prepare_worktree(uid)
+                    spec = self.write_spec(uid, wt)
+                    crashes = 0
+                    continue
                 if "blocking questions" in why:
                     v.update(status="needs-answer", finished=now_iso(),
                              reason=f"{why}; answer in {posix(wt / '.forge' / 'questions.json')} and rerun")
@@ -658,6 +663,36 @@ class Queue:
         self.save()
         self.say(f"{uid} attempt {v['attempts'] + 1}/{self.cfg['max_attempts']} after: {why}")
         return wt, spec
+
+    RED_BASE_WAITS = 3
+    RED_BASE_WAIT_S = 900
+    RED_BASE_POLL_S = 60
+
+    def wait_green_base(self, uid: str, wt: Path, why: str) -> bool:
+        """A red base reruns red on the same tree: wait for a new integration tip (or a flaky env to recover)
+        and start again from a fresh worktree; nothing was spent, so no attempt is consumed."""
+        v = self.u(uid)
+        n = int(v.get("red_base_waits") or 0)
+        if n >= self.RED_BASE_WAITS or self.remaining_s() <= 0:
+            return False
+        ib = self.cfg["integration_branch"]
+        tip = git(self.repo, "rev-parse", ib).stdout.strip()
+        v["red_base_waits"] = n + 1
+        v.setdefault("history", []).append({"reason": why, "cost": 0.0, "disputes": ""})
+        self.snapshot(uid, wt, f"{uid}.redbase{n + 1}")
+        self.save()
+        br = self.branch(uid)
+        with self.lock:
+            git(self.repo, "worktree", "remove", "--force", str(wt))
+            shutil.rmtree(wt, ignore_errors=True)
+            git(self.repo, "worktree", "prune")
+            git(self.repo, "branch", "-D", br)
+        self.say(f"{uid} {why}: waiting for a new integration tip ({n + 1}/{self.RED_BASE_WAITS})")
+        waited = 0
+        while waited < self.RED_BASE_WAIT_S and git(self.repo, "rev-parse", ib).stdout.strip() == tip:
+            sleep(self.RED_BASE_POLL_S)
+            waited += self.RED_BASE_POLL_S
+        return True
 
     def final_reason(self, uid: str, why: str) -> str:
         n = int(self.u(uid).get("attempts") or 0) + 1
