@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.4
+- forge_run: the inner loop is ON by default - without an `inner_loop` key in the profile the build/fix sessions iterate on the test gates only (`test_gates`, or gates named *test*) and the driver runs the full gate set. `inner_loop: off` restores the old behaviour (the session runs every gate). Profiles without test gates keep the plain gate list.
+
 ## 0.3.3
 Speed fixes from the 2026-11-26 vetal_project audit (sessions waited 72% of their time on their own full-coverage runs: 113 runs x 4.4 min; A/B on unit U13: 53.6 -> 15.6 min, same gates and test count).
 - forge_run: profile key `inner_loop` - a fast targeted check the build/fix sessions iterate on; the full gates are run only by the driver's check (before: the prompt told the model to run every gate until green, then check re-ran them).

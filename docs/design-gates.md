@@ -24,6 +24,8 @@ Sources: `docs/research/quality-gates-evidence.md`, an analysis of the bob-pipel
 | Weakening configs | changes to profile files, linter, analyzer and coverage configs, the old-violations list |
 | Reducing the number of tests | test count after ≥ test count before |
 Red on base: after the tests are frozen, the driver runs the test gates once (profile key `test_gates`, otherwise ids containing `test`) on the tree without the implementation; green tests prove nothing — one session adds failing tests, and if it is still green after that, the report marks the run "vacuous".
+
+Inner loop (0.3.4+, on by default): build/fix sessions iterate only on a fast check and do not run the full gates; the driver's check runs them and sends failures back. Profile key `inner_loop: '<command>'` sets the check (best: build once + only the affected test projects, no coverage); without the key it is the test gates joined with `&&`; `inner_loop: off` makes the session run every gate itself (pre-0.3.3 behaviour).
 Exceptions only as a list in the profile that a human approves. Hardcoding of expected values is not caught by this; against it there is acceptance by a strong model and mutations on the diff.
 
 ## What runs when

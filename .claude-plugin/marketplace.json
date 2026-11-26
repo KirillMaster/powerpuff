@@ -8,7 +8,7 @@
     {
       "name": "powerpuff",
       "source": "./",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "description": "Spec preparation with a human, autonomous implementation, human audit by decision cards"
     }
   ]

@@ -66,7 +66,20 @@ def test_inner_loop_replaces_gates_in_the_session_prompt(h: Harness) -> None:
     assert "do not run them yourself" in impl and GATE in impl
 
 
-def test_no_inner_loop_keeps_plain_gate_list(h: Harness) -> None:
+def test_default_inner_loop_is_the_test_gates(h: Harness) -> None:
+    put_profile(h, profile(gates="  iteration: [lint, unit-tests]\n", commands={"lint": GATE, "unit-tests": GATE}))
+    assert h.run("Build foo").rc == 0
+    impl = next(c for c in h.calls() if c["stage"] == "implement")["prompt"]
+    assert f"inner loop (YOU run this one, it is fast): `{GATE}`" in impl
+
+
+def test_inner_loop_off_keeps_plain_gate_list(h: Harness) -> None:
+    put_profile(h, profile(gates="  iteration: [unit-tests]\n", commands={"unit-tests": GATE}, extra="inner_loop: off\n"))
+    assert h.run("Build foo").rc == 0
+    assert "inner loop" not in next(c for c in h.calls() if c["stage"] == "implement")["prompt"]
+
+
+def test_no_test_gates_no_default_inner_loop(h: Harness) -> None:
     put_profile(h, profile())
     assert h.run("Build foo").rc == 0
     assert "inner loop" not in next(c for c in h.calls() if c["stage"] == "implement")["prompt"]

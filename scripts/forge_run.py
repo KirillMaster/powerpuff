@@ -309,7 +309,20 @@ def load_profile(root: Path, path: Path | None = None) -> dict | None:
     return {"approved": approved, "gates": {i: cmds[i] for i in ids}, "final": lists.get("final", []),
             "final_gates": {i: cmds[i] for i in lists.get("final", [])},
             "format_fix": str(cfg["format_fix"]) if cfg.get("format_fix") else None,
-            "inner_loop": str(cfg["inner_loop"]) if cfg.get("inner_loop") else None, "config": cfg}
+            "inner_loop": inner_loop_value(cfg), "config": cfg}
+
+
+INNER_OFF = {"off", "false", "no", "none", "0"}
+
+
+def inner_loop_value(cfg: dict) -> str | None:
+    """Profile `inner_loop`: a command, `off`/false to disable, absent -> None (the default inner loop applies)."""
+    if "inner_loop" not in cfg or cfg["inner_loop"] is None:
+        return None
+    raw = cfg["inner_loop"]
+    if raw is False or str(raw).strip().lower() in INNER_OFF or not str(raw).strip():
+        return "off"
+    return str(raw)
 
 
 def failure_brief(rep: dict, limit: int = 8000) -> str:
@@ -1054,11 +1067,17 @@ class Run:
             + self.human_decisions()
 
     def inner_loop(self) -> str | None:
-        """Profile `inner_loop`: a fast targeted check the session iterates on; the full gates run only in the driver."""
-        if self.state.get("gates_source") != "profile":
+        """Fast check the session iterates on (profile `inner_loop`, default = the test gates); the driver runs the full gates.
+        `inner_loop: off` in the profile restores the old behaviour (the session runs every gate)."""
+        cmd = inner_loop_value(self.profile or {}) if self.state.get("gates_source") == "profile" else None
+        if cmd == "off":
             return None
-        cmd = (self.profile or {}).get("inner_loop")
-        return forge_check.expand(cmd, self.gate_ctx()) if cmd else None
+        if not cmd:
+            tests = list(self.test_gates().values())
+            if not tests:
+                return None
+            cmd = tests[0] if len(tests) == 1 else " && ".join(f"({c})" for c in tests)
+        return forge_check.expand(cmd, self.gate_ctx())
 
     def inner_note(self) -> str:
         inner = self.inner_loop()

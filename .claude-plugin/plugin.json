@@ -1,6 +1,6 @@
 {
   "name": "powerpuff",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Spec preparation with a human, autonomous implementation, human audit by decision cards: a script orchestrates, a strong model audits and accepts, a cheap model writes; frozen acceptance tests and a deterministic done-check",
   "author": {
     "name": "Kirill Su",
