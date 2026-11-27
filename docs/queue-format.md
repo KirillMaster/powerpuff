@@ -51,6 +51,7 @@ units:
 | `budget.unit_usd` | none | explicit per-unit limit instead of the formula below |
 | `model` / `writer` | `opus` / `sonnet` | strong model and writer for `forge_run.py` |
 | `model_build` / `model_fix` | `model` / `model_build` | plain engine: model for the implementation turn and for fix rounds (`--model-build` / `--model-fix`); the last fix round is escalated to `model`. Without the key — `model_build`/`model_fix` from `powerpuff.yaml` |
+| `advisor` | none (profile `advisor`) | plain engine: advisor model of build/fix sessions (`--advisor`); `off` disables a profile advisor |
 | `parallel` | 1 | how many independent units run at once (`--parallel N` overrides) |
 | `max_attempts` | 2 | total runs per unit; the next one starts from a fresh branch, with the reason for the previous failure and its `disputes.md` in the spec |
 | `already_merged` | `[]` | ids of units already merged into `base` (continuing a previous run): immediately `merged` |

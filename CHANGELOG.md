@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.6
+- Claude Code advisor: profile/queue key `advisor` and `--advisor` (forge_run, prepare_run) turn on a stronger advisor model (e.g. `fable`) in plain build/fix sessions and in prepare sessions, via `claude -p --settings` `advisorModel`. Intended pairing: `model_build: sonnet` + `advisor: fable`. Advisor calls are counted (`state.json` `advisor`, `advisor_calls=` in progress); an unavailable advisor or one never called (missing Fable usage-credit consent) is a WARNING, the run continues. prepare_run writes `advisor` into the emitted queue. Advisor tokens are uncached input of the advisor model and count against `max_usd` through `total_cost_usd`.
+
 ## 0.3.5
 - forge_check: frozen tests are compared ignoring line endings (LF/CRLF): a worktree on a host with core.autocrlf=true restored a tampered frozen test as CRLF, its sha never matched and every check failed - false "stuck" on a valid tree (vetal U15/U27).
 - forge_run: a check that restored a tampered frozen test is not cached, the restored tree is checked afresh next time.

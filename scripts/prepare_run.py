@@ -215,7 +215,12 @@ class Prepare:
         model = self.a.model
         argv = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", model,
                 "--allowedTools", READ_ONLY_TOOLS]
-        self.log(f"{stage}: session start ({model})")
+        advisor = getattr(self.a, "advisor", None)
+        adv = forge_run.advisor_settings(advisor, self.dir)
+        argv += adv
+        prompt += forge_run.ADVISOR_NOTE if adv else ""
+        tally: dict = {}
+        self.log(f"{stage}: session start ({model}{f', advisor {advisor}' if adv else ''})")
         proc = subprocess.Popen(argv, cwd=self.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                                 shell=sys.platform == "win32", env={**os.environ, "POWERPUFF_DRIVER": "1"})
@@ -229,11 +234,16 @@ class Prepare:
             except ValueError:
                 tail = (tail + [line.strip()])[-20:]
                 continue
+            forge_run.advisor_event(ev, tally)
             if isinstance(ev, dict) and ev.get("type") == "assistant" and ev.get("is_api_error_message"):
                 api_msg = True
             if isinstance(ev, dict) and ev.get("type") == "result":
                 result = ev
         proc.wait()
+        if tally.get("errors"):
+            self.log(f"{stage}: WARNING advisor unavailable ({tally.get('last_error')}), continuing without it")
+        if adv:
+            self.log(f"{stage}: advisor_calls={tally.get('calls', 0)}")
         r = result or {}
         cost = self.state["cost"]
         spent = float(r.get("total_cost_usd") or 0)
@@ -524,6 +534,9 @@ class Prepare:
                        "budget": {"max_usd": self.a.queue_max_usd, "max_hours": self.a.queue_max_hours,
                                   "fix_reserve": 0.33},
                        "model": self.a.model, "auto_merge": ["low"]}
+        advisor = getattr(self.a, "advisor", None)
+        if not forge_run.advisor_off(advisor):
+            queue["advisor"] = advisor
         final = {k: v for k, v in (self.state.get("profile_final") or {}).items() if v}
         if final:
             queue["final"] = {"timeout": 1800, "commands": final}
@@ -596,6 +609,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("spec")
     ap.add_argument("--repo", default=".")
     ap.add_argument("--model", default="opus")
+    ap.add_argument("--advisor", default=None, help="advisor model of the preparation sessions (fable|opus|sonnet); "
+                                                    "also written to the emitted queue")
     ap.add_argument("--out", default="queue.yaml")
     ap.add_argument("--max-unit-lines", type=int, default=200)
     ap.add_argument("--max-usd", type=float, default=5, help="cumulative notional budget of the preparation")

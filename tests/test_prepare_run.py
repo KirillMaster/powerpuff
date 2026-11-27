@@ -39,7 +39,9 @@ cp.write_text(json.dumps(counters), encoding="utf-8")
 entries = scn.get(stage) or [{}]
 entry = entries[min(idx, len(entries) - 1)]
 with open(str(scn_path) + ".calls.jsonl", "a", encoding="utf-8") as f:
-    f.write(json.dumps({"stage": stage, "index": idx, "model": model, "tools": tools, "prompt": prompt}) + "\\n")
+    f.write(json.dumps({"stage": stage, "index": idx, "model": model, "tools": tools, "prompt": prompt,
+                        "advisor": json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+                        ["advisorModel"] if "--settings" in argv else None}) + "\\n")
 if entry.get("kill_driver"):
     os.kill(int(Path(os.environ["FAKE_CLAUDE_PIDFILE"]).read_text().strip()), signal.SIGTERM)
     time.sleep(0.5)

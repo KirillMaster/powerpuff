@@ -381,7 +381,7 @@ def test_staged_sleeps_on_rate_limit_without_consuming_try(tmp_path: Path, monke
                  {"ok": True, "text": "", "session_id": "s"}]
     calls: list[str] = []
 
-    def fake_session(self, stage, model, prompt, resume=None):  # noqa: ANN001
+    def fake_session(self, stage, model, prompt, resume=None, advisor=None):  # noqa: ANN001
         calls.append(stage)
         x = seq.pop(0)
         if isinstance(x, Exception):

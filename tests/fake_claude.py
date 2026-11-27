@@ -69,6 +69,8 @@ def main() -> int:
     argv = sys.argv[1:]
     model = argv[argv.index("--model") + 1] if "--model" in argv else None
     resume = argv[argv.index("--resume") + 1] if "--resume" in argv else None
+    settings = argv[argv.index("--settings") + 1] if "--settings" in argv else None
+    advisor = json.loads(Path(settings).read_text(encoding="utf-8")).get("advisorModel") if settings else None
     prompt = sys.stdin.read()
     first = prompt.lstrip().splitlines()[0] if prompt.strip() else ""
     stage = next((name for head, name in FIRST_LINES if first.startswith(head)), "unknown")
@@ -91,7 +93,7 @@ def main() -> int:
     log = Path(os.environ.get("FAKE_CLAUDE_LOG") or str(scn_path) + ".calls.jsonl")
     with open(log, "a", encoding="utf-8") as f:
         f.write(json.dumps({"n": n, "stage": stage, "index": idx, "model": model, "has_resume": resume is not None,
-                            "resume": resume, "session_id": sid, "prompt": prompt}) + "\n")
+                            "resume": resume, "session_id": sid, "prompt": prompt, "advisor": advisor}) + "\n")
 
     if entry.get("kill_driver"):
         pidfile = Path(os.environ["FAKE_CLAUDE_PIDFILE"])
@@ -121,6 +123,13 @@ def main() -> int:
     print(json.dumps({"type": "system", "subtype": "init", "session_id": sid}), flush=True)
     print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": f"{stage} working"}]}}),
           flush=True)
+    if advisor and entry.get("advisor", "ok") != "silent":
+        result = {"type": "advisor_redacted_result", "encrypted_content": "x"} if entry.get("advisor", "ok") == "ok" \
+            else {"type": "advisor_tool_result_error", "error_code": "unavailable"}
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "server_tool_use", "id": "srv1", "name": "advisor", "input": {}}]}}), flush=True)
+        print(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "advisor_tool_result", "tool_use_id": "srv1", "content": result}]}}), flush=True)
     if kind == "no_result":
         return int(entry.get("exit_code", 0))
     if kind == "api_error":

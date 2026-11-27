@@ -17,6 +17,7 @@ The profile lives in the project repository and is approved by a human. The core
 | `languages` | map | own row of the language table (ext, test_file, skip, suppression, test_decl); without PyYAML only in `powerpuff.gates.json` | `gate_guard` |
 | `test_gates` | list of ids | which gates check "red on base"; without the key — ids containing `test` | `forge_run` |
 | `test_infra` | list of globs | manifests the test writer may change | `forge_run` |
+| `advisor` | string | Claude Code advisor model (`fable` / `opus` / `sonnet` / full id; `off`) for plain build and fix sessions, passed as `--settings` `advisorModel`; pair it with a cheaper `model_build` / `model_fix` | `forge_run` |
 | `diff_gates` | map | thresholds for `diff_gates.py all` | `diff_gates` |
 | `hooks` | — | not a key: the plugin hooks (`hooks/hooks.json`) take `gates.iteration` and `protected` from the profile | `hook_stop`, `hook_protect` |
 

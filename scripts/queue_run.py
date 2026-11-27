@@ -220,6 +220,7 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
            "model": str(q.get("model") or "opus"), "writer": str(q.get("writer") or "sonnet"),
            "model_build": str(q["model_build"]) if q.get("model_build") else None,
            "model_fix": str(q["model_fix"]) if q.get("model_fix") else None, "unit_usd": unit_usd,
+           "advisor": str(q["advisor"]) if q.get("advisor") is not None else None,
            "already_merged": already, "auto_merge": auto, "assume_defaults": assume, "engine": engine, "units": units,
            "final": final, "shared": shared_path, **nums, **ints}
     return cfg, errs
@@ -508,6 +509,7 @@ class Queue:
         extra = [*(["--assume-defaults"] if self.cfg.get("assume_defaults") else []),
                  *(["--model-build", self.cfg["model_build"]] if self.cfg.get("model_build") else []),
                  *(["--model-fix", self.cfg["model_fix"]] if self.cfg.get("model_fix") else []),
+                 *(["--advisor", self.cfg["advisor"]] if self.cfg.get("advisor") else []),
                  *(["--skip-base-check"] if self.base_verified(wt) else [])]
         return [sys.executable, str(FORGE), str(spec), "--repo", str(wt), "--model", self.cfg["model"],
                 "--writer", self.cfg["writer"], "--engine", self.cfg["engine"], "--max-usd", f"{cap:.4f}", "--max-hours", f"{hours:.4f}",
@@ -1040,7 +1042,8 @@ def main(argv: list[str] | None = None) -> int:
         first_pass, cap = caps(cfg, len(q.selected))
         print(f"queue: dry-run run_id={cfg['run_id']} base={cfg['base']} integration={cfg['integration_branch']}")
         print(f"queue: parallel={cfg['parallel']} max_attempts={cfg['max_attempts']} model={cfg['model']} "
-              f"model_build={cfg['model_build'] or cfg['model']} model_fix={cfg['model_fix'] or cfg['model_build'] or cfg['model']}")
+              f"model_build={cfg['model_build'] or cfg['model']} model_fix={cfg['model_fix'] or cfg['model_build'] or cfg['model']} "
+              f"advisor={cfg.get('advisor') or 'profile'}")
         print(f"queue: budget max_usd={cfg['max_usd']} max_hours={cfg['max_hours']} fix_reserve={cfg['fix_reserve']} "
               f"first_pass=${first_pass:.2f} reserve=${cfg['max_usd'] - first_pass:.2f} unit_cap=${cap:.2f}")
         for n, u in enumerate(plan, 1):

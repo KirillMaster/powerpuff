@@ -146,6 +146,41 @@ goes to `.forge/disputes.md` with the reason.
 """
 FIX_OUTPUT = "\nforge_check output:\n"
 
+ADVISOR_NOTE = ("\n\nAn advisor model is available (the `advisor` tool). Consult it before committing to an approach, "
+                "when the same gate fails twice, and before declaring the work done.")
+
+
+def advisor_off(value: object) -> bool:
+    return not value or str(value).strip().lower() in ("off", "none", "false", "no")
+
+
+def advisor_settings(advisor: str | None, where: Path) -> list[str]:
+    """`--settings <file>` that turns the Claude Code advisor on for one `claude -p` session (a file, not inline JSON:
+    the Windows driver runs through cmd.exe)."""
+    if advisor_off(advisor):
+        return []
+    where.mkdir(parents=True, exist_ok=True)
+    p = where / "advisor-settings.json"
+    p.write_text(json.dumps({"advisorModel": str(advisor).strip()}), encoding="utf-8")
+    return ["--settings", str(p)]
+
+
+def advisor_event(ev: object, tally: dict) -> None:
+    """Counts advisor calls and failed advisor results in one stream-json event."""
+    if not isinstance(ev, dict) or ev.get("type") != "assistant":
+        return
+    for c in (ev.get("message") or {}).get("content") or []:
+        if not isinstance(c, dict):
+            continue
+        if c.get("type") == "server_tool_use" and c.get("name") == "advisor":
+            tally["calls"] = tally.get("calls", 0) + 1
+        elif c.get("type") == "advisor_tool_result":
+            body = c.get("content")
+            kind = str(body.get("type", "")) if isinstance(body, dict) else ""
+            if "error" in kind:
+                tally["errors"] = tally.get("errors", 0) + 1
+                tally["last_error"] = str(body.get("error_code") or kind) if isinstance(body, dict) else kind
+
 FIX_HANDOFF = """
 You take over an unattended build from another session. Spec: `.forge/spec.md` (read it first); question lines and
 defaults: `.forge/requirements.md`; disputes so far: `.forge/disputes.md` (may be absent). Frozen acceptance tests (never
@@ -436,7 +471,8 @@ class Run:
         self.state["frozen_sha"] = self.git("rev-parse", "HEAD")
         self.save()
 
-    def session(self, stage: str, model: str, prompt: str, resume: str | None = None) -> dict:
+    def session(self, stage: str, model: str, prompt: str, resume: str | None = None,
+                advisor: str | None = None) -> dict:
         """One `claude -p` session. Returns {"ok", "text", "session_id"}; raises RateLimited."""
         if time.monotonic() > self.deadline:
             raise SystemExit(self.finish("failed", "wall-clock budget exhausted"))
@@ -445,7 +481,12 @@ class Run:
         argv = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", model,
                 "--permission-mode", self.a.permission_mode, "--strict-mcp-config"]
         argv += ["--resume", resume] if resume else []
-        self.log(f"{stage}: session start ({model}{', resume' if resume else ''})")
+        adv = advisor_settings(advisor, self.forge)
+        argv += adv
+        prompt += ADVISOR_NOTE if adv else ""
+        tally: dict = {}
+        self.log(f"{stage}: session start ({model}{', resume' if resume else ''}"
+                 f"{f', advisor {advisor}' if adv else ''})")
         proc = subprocess.Popen(argv, cwd=self.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
                                 shell=sys.platform == "win32", env={**os.environ, "POWERPUFF_DRIVER": "1"})
@@ -459,6 +500,7 @@ class Run:
             except ValueError:
                 tail = (tail + [line.strip()])[-20:]
                 continue
+            advisor_event(ev, tally)
             if isinstance(ev, dict) and ev.get("type") == "rate_limit_event":
                 info = ev.get("rate_limit_info") or {}
                 note_rate(info)
@@ -504,17 +546,26 @@ class Run:
             raise ApiUnreachable(text + "\n" + "\n".join(tail))
         self.outage.healthy()
         ok = bool(result) and not r.get("is_error")
+        if adv:
+            st = self.state.setdefault("advisor", {"model": advisor, "calls": 0, "errors": 0})
+            st["calls"] += tally.get("calls", 0)
+            st["errors"] += tally.get("errors", 0)
+            self.save()
+            if tally.get("errors"):
+                self.log(f"{stage}: WARNING advisor unavailable ({tally.get('last_error')}), continuing without it")
         self.log(f"{stage}: session end ok={ok} cost={spent:.2f} turns={r.get('num_turns')}"
+                 + (f" advisor_calls={tally.get('calls', 0)}" if adv else "")
                  + ("" if ok else " error=" + " ".join(text.split())[:200] + " tail=" + " | ".join(tail[-3:])[:300]))
         return {"ok": ok, "text": text, "session_id": r.get("session_id")}
 
-    def staged(self, stage: str, model: str, prompt: str, done, resume: str | None = None, tries: int = 2) -> dict:
+    def staged(self, stage: str, model: str, prompt: str, done, resume: str | None = None, tries: int = 2,
+               advisor: str | None = None) -> dict:
         """Runs a session until `done()` holds (deterministic check), sleeping through rate limits."""
         out: dict = {"ok": False, "text": "", "session_id": resume}
         left = tries
         while left > 0:
             try:
-                out = self.session(stage, model, prompt, resume)
+                out = self.session(stage, model, prompt, resume, advisor=advisor)
             except RateLimited as e:
                 if self.a.no_wait:
                     self.emit_result("rate limit: " + e.text[-300:], is_error=True)
@@ -1281,6 +1332,12 @@ class Run:
             return prof.strip()
         return self.model_for("build") if step == "fix" else self.state["writer"]
 
+    def advisor(self) -> str | None:
+        """plain engine build/fix sessions: advisor model = CLI `--advisor`, else profile `advisor`, else none."""
+        cli = getattr(self.a, "advisor", None)
+        val = cli if cli is not None else (self.profile or {}).get("advisor")
+        return None if advisor_off(val) else str(val).strip()
+
     def fix_handoff(self) -> str:
         gates, fmt = self.gate_lines()
         stat = self.git("diff", "--stat", self.state["start_sha"], "--", ".", ":!.forge")[-3000:] or "(none)"
@@ -1299,7 +1356,7 @@ class Run:
             self.state["plain_build_started"] = True
             self.save()
             model = self.model_for("build")
-            out = self.staged("plain-build", model, prompt, lambda: True, resume=sid)
+            out = self.staged("plain-build", model, prompt, lambda: True, resume=sid, advisor=self.advisor())
             self.state.update(sid_build=out.get("session_id") or sid, sid_build_model=model)
             if not out["ok"]:
                 self.commit("forge(plain-build, unfinished)")
@@ -1364,7 +1421,8 @@ class Run:
                      "tests or the gate config).")
         brief = FIX_OUTPUT + failure_brief(rep) + note + self.human_decisions()
         prompt = FIX + self.inner_note() + (brief if sid else self.fix_handoff() + brief)
-        out = self.staged(f"plain-fix{n}{'-esc' if escalate else ''}", model, prompt, lambda: True, resume=sid)
+        out = self.staged(f"plain-fix{n}{'-esc' if escalate else ''}", model, prompt, lambda: True, resume=sid,
+                          advisor=self.advisor())
         if out.get("session_id"):
             self.state.update(sid_build=out["session_id"], sid_build_model=model)
             self.save()
@@ -1412,6 +1470,10 @@ class Run:
     def finish(self, status: str, why: str = "") -> int:
         rep: dict = self.check() if (self.forge / "frozen.sha256").is_file() else {"done": False}
         open_gaps = self.state.get("open_gaps") or []
+        adv = self.state.get("advisor")
+        if adv and not adv.get("calls"):
+            self.log(f"WARNING advisor {adv.get('model')} was configured but never called (for fable: accept the "
+                     f"usage-credit consent once via an interactive `/model fable`)")
         if status == "done" and not rep["done"]:
             status, why = "failed", why or "forge_check is red"
         if status == "done" and open_gaps:
@@ -1547,6 +1609,8 @@ def main() -> int:
                                                          "else --model)")
     ap.add_argument("--model-fix", default=None, help="plain: model of fix rounds (default: profile `model_fix`, else "
                                                        "the build model); the last round escalates to --model")
+    ap.add_argument("--advisor", default=None, help="plain: advisor model of build/fix sessions (fable|opus|sonnet|off; "
+                                                     "default: profile `advisor`, else none)")
     ap.add_argument("--max-fix-rounds", type=int, default=4, help="plain: resumes with failing gates before giving up")
     ap.add_argument("--accept", action="store_true", help="plain: also run the independent acceptance pass at the end")
     ap.add_argument("--max-hours", type=float, default=8)
