@@ -64,6 +64,19 @@ def test_never_called_advisor_is_reported(h: PH) -> None:
     assert "WARNING advisor fable was configured but never called" in progress(h)
 
 
+def test_env_default_applies_without_profile_key(h: PH, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("POWERPUFF_ADVISOR", "fable")
+    assert h.run().rc == 0
+    assert h.of("pbuild")[0]["advisor"] == "fable" and h.of("ptests")[0]["advisor"] is None
+
+
+def test_profile_off_beats_env_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("POWERPUFF_ADVISOR", "fable")
+    h = PH(tmp_path, profile(extra="test_gates: [unit]\nadvisor: off\n"))
+    assert h.run().rc == 0
+    assert {c["advisor"] for c in h.calls()} == {None}
+
+
 def test_queue_passes_advisor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from test_plain_engine import queue_cmd
     cmd = queue_cmd(tmp_path, monkeypatch, (), advisor="fable")

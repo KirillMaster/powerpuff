@@ -1333,9 +1333,11 @@ class Run:
         return self.model_for("build") if step == "fix" else self.state["writer"]
 
     def advisor(self) -> str | None:
-        """plain engine build/fix sessions: advisor model = CLI `--advisor`, else profile `advisor`, else none."""
+        """plain engine build/fix sessions: advisor model = CLI `--advisor`, else profile `advisor`, else the
+        user default `POWERPUFF_ADVISOR`, else none."""
         cli = getattr(self.a, "advisor", None)
-        val = cli if cli is not None else (self.profile or {}).get("advisor")
+        prof = (self.profile or {}).get("advisor")
+        val = cli if cli is not None else prof if prof is not None else os.environ.get("POWERPUFF_ADVISOR")
         return None if advisor_off(val) else str(val).strip()
 
     def fix_handoff(self) -> str:

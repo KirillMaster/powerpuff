@@ -25,7 +25,7 @@ The measurement showed that a single Opus session with no orchestration gives th
 | `--engine plain\|forge` | engine, default `plain` |
 | `--max-fix-rounds N` | how many times to continue the session with red gates (4) |
 | `--model-build` / `--model-fix` | models for the implementation turn and fix rounds (profile: `model_build` / `model_fix`) |
-| `--advisor M` | advisor model of build/fix sessions (profile: `advisor`; `off` disables). The session gets `--settings` with `advisorModel` and a prompt line to consult it; calls are counted in `state.json` `advisor`, an unavailable advisor is a WARNING in `progress.md`, the run continues |
+| `--advisor M` | advisor model of build/fix sessions (profile: `advisor`, else env `POWERPUFF_ADVISOR`; `off` disables). The session gets `--settings` with `advisorModel` and a prompt line to consult it; calls are counted in `state.json` `advisor`, an unavailable advisor is a WARNING in `progress.md`, the run continues |
 | `--accept` | one independent acceptance after green gates |
 | others | as in forge: `--model`, `--max-usd`, `--max-hours`, `--no-wait`, `--max-outage-min`, `--assume-defaults`, `--allow-red-base`, `--final`, `--stream`; `--preflight` is not supported (no audit) |
 

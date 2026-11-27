@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.3.7
+- advisor: user-level default `POWERPUFF_ADVISOR` (env) for forge_run build/fix and prepare_run sessions; order: `--advisor` / queue `advisor` > profile `advisor` (`off` disables) > env. Enables the advisor in repos whose tracked `powerpuff.yaml` should not change.
+
 ## 0.3.6
 - Claude Code advisor: profile/queue key `advisor` and `--advisor` (forge_run, prepare_run) turn on a stronger advisor model (e.g. `fable`) in plain build/fix sessions and in prepare sessions, via `claude -p --settings` `advisorModel`. Intended pairing: `model_build: sonnet` + `advisor: fable`. Advisor calls are counted (`state.json` `advisor`, `advisor_calls=` in progress); an unavailable advisor or one never called (missing Fable usage-credit consent) is a WARNING, the run continues. prepare_run writes `advisor` into the emitted queue. Advisor tokens are uncached input of the advisor model and count against `max_usd` through `total_cost_usd`.
 

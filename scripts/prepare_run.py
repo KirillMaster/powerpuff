@@ -216,6 +216,7 @@ class Prepare:
         argv = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--model", model,
                 "--allowedTools", READ_ONLY_TOOLS]
         advisor = getattr(self.a, "advisor", None)
+        advisor = advisor if advisor is not None else os.environ.get("POWERPUFF_ADVISOR")
         adv = forge_run.advisor_settings(advisor, self.dir)
         argv += adv
         prompt += forge_run.ADVISOR_NOTE if adv else ""
