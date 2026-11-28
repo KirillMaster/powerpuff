@@ -52,7 +52,8 @@ units:
 | `model` / `writer` | `opus` / `sonnet` | strong model and writer for `forge_run.py` |
 | `model_build` / `model_fix` | `model` / `model_build` | plain engine: model for the implementation turn and for fix rounds (`--model-build` / `--model-fix`); the last fix round is escalated to `model`. Without the key — `model_build`/`model_fix` from `powerpuff.yaml` |
 | `advisor` | none (profile `advisor`) | plain engine: advisor model of build/fix sessions (`--advisor`); `off` disables a profile advisor |
-| `parallel` | 1 | how many independent units run at once (`--parallel N` overrides) |
+| `parallel` | 3 | how many independent units run at once (`--parallel N` overrides; env `POWERPUFF_PARALLEL` changes the default; deps, shared files and the rate throttle still gate it) |
+| `worktree_pool` | on | `off` (or env `POWERPUFF_POOL=0`, or profile `worktree_pool: off`) removes finished unit worktrees instead of keeping them in `<repo>/.powerpuff/pool/` (max 6) to reuse their `bin/` / `obj/` build outputs |
 | `max_attempts` | 2 | total runs per unit; the next one starts from a fresh branch, with the reason for the previous failure and its `disputes.md` in the spec |
 | `already_merged` | `[]` | ids of units already merged into `base` (continuing a previous run): immediately `merged` |
 | `auto_merge` | `[]` | risk levels that merge without a human |

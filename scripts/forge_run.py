@@ -134,7 +134,8 @@ Rules:
   append `- <test>: <why, with the spec quote>` to `.forge/disputes.md` and implement the spec.
 - Follow existing conventions and structure; no unrelated refactors; never weaken a gate (no disabled rules, no
   skipped tests, no config edits).
-- Before finishing run the formatter in fix mode (FORMAT_FIX) and then every gate until all exit 0:
+- Do not run the formatter (FORMAT_FIX); the driver formats changed files after your turn. Before finishing run every
+  gate until all exit 0:
 GATES
 Finish with one line: BUILD: done"""
 
@@ -202,7 +203,8 @@ edit them):
 FROZEN
 Changes so far (`git diff --stat START_SHA`):
 DIFFSTAT
-Gates (all must exit 0; formatter in fix mode first: FORMAT_FIX):
+Do not run the formatter (FORMAT_FIX); the driver formats changed files after your turn.
+Gates (all must exit 0):
 GATES
 Work in few turns: put independent tool calls (reads of different files, searches, independent commands) in ONE
 message so they run in parallel; read each file once (by ranges if large); do not re-run a check that already passed
@@ -251,7 +253,8 @@ Rules:
 - Follow existing conventions; no unrelated refactors; never weaken a gate (no disabled rules, no skipped tests, no
   config edits).
 - Work in few turns: put independent tool calls (reads of different files, searches, independent commands) in ONE message so they run in parallel; read each file once (by ranges if large); do not re-run a check that already passed on an unchanged tree.
-- Before finishing run the formatter in fix mode (FORMAT_FIX) and then every gate until all exit 0:
+- Do not run the formatter (FORMAT_FIX); the driver formats changed files after your turn. Before finishing run every
+  gate until all exit 0:
 GATES
 Finish with one line: BUILD: done"""
 
@@ -486,6 +489,36 @@ class Run:
     def commit(self, msg: str) -> None:
         self.git("add", "-A", "--", ".", ":!.forge")
         self.git("-c", "user.name=forge", "-c", "user.email=forge@local", "commit", "-q", "--no-gpg-sign", "-m", msg)
+
+    def unit_files(self) -> list[str]:
+        """Repo-relative files the unit changed since its start (tracked vs start_sha, plus untracked), `.forge/` out."""
+        start = self.state.get("start_sha") or "HEAD"
+        out = self.git("-c", "core.quotepath=off", "diff", "--name-only", "--no-renames", "-z", start) + "\0" \
+            + self.git("-c", "core.quotepath=off", "ls-files", "--others", "--exclude-standard", "-z")
+        files = [x for x in out.split("\0") if x and not x.startswith(".forge/") and (self.root / x).is_file()]
+        return list(dict.fromkeys(files))
+
+    def driver_format(self) -> None:
+        """The profile `format_fix` run by the driver after a build / fix session, scoped to the unit's files for
+        `dotnet format`; a failing formatter is logged, the gates decide."""
+        fmt = self.state.get("format_fix")
+        if not fmt:
+            return
+        cmd = forge_check.scope_format(forge_check.expand(str(fmt), self.gate_ctx()), self.unit_files())
+        if cmd is None:
+            return
+        ctx = self.gate_ctx()
+        try:
+            p = subprocess.run(cmd, shell=True, cwd=self.root, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=max(self.a.gate_timeout, 900), env=forge_check.context_env(ctx))
+            if p.returncode:
+                self.log(f"format_fix exited {p.returncode}: {(p.stdout + p.stderr)[-300:].strip()}")
+        except (subprocess.TimeoutExpired, OSError) as e:
+            self.log(f"format_fix failed: {e}")
+
+    def format_commit(self, msg: str) -> None:
+        self.driver_format()
+        self.commit(msg)
 
     def commit_frozen(self, msg: str) -> None:
         self.commit(msg)
@@ -1117,7 +1150,8 @@ class Run:
         if tampered:
             self.state["frozen_violations"] = int(self.state.get("frozen_violations", 0)) + len(tampered)
         self.save()  # the checker sees the driver's state, not what a session left in state.json
-        chk = forge_check.check_gates(self.root, self.a.gate_timeout, self.state.get("gates") or {}, self.gate_ctx())
+        chk = forge_check.check_gates(self.root, self.a.gate_timeout, self.state.get("gates") or {}, self.gate_ctx(),
+                                      changed=self.unit_files())
         self.note_gates(chk["results"])
         rep: dict = {"coverage": forge_check.check_coverage(self.root, files),
                      "frozen": forge_check.check_frozen(self.root, files), "gates": chk, "guard": self.guard()}
@@ -1171,7 +1205,7 @@ class Run:
         for i in range(start, rounds):
             out = self.staged(f"{stage}{i + 1}", self.state["writer"], prompt, lambda: True, resume=sid, tries=2)
             sid = out.get("session_id") if out["ok"] else None
-            self.commit(f"forge({stage}{i + 1})")
+            self.format_commit(f"forge({stage}{i + 1})")
             rep = self.check()
             self.state[key] = sid
             self.state[f"round_{stage}"] = i + 1
@@ -1190,7 +1224,7 @@ class Run:
             self.staged(f"{stage}-escalation", self.a.model,
                         self.build_prompt() + "\n\nA previous implementer left this failing:\n" + failing,
                         lambda: True)
-            self.commit(f"forge({stage}-escalation)")
+            self.format_commit(f"forge({stage}-escalation)")
             return self.check()["done"]
         return False
 
@@ -1395,7 +1429,7 @@ class Run:
                 self.commit("forge(plain-build, unfinished)")
                 raise SystemExit(self.fail_resumable("build session ended with an error", "plain-build"))
             self.state["plain_built"] = True
-            self.commit("forge(plain-build)")
+            self.format_commit("forge(plain-build)")
             self.save()
         if self.state.pop("stuck_round", None) is not None:
             self.state["max_rounds_extra"] = int(self.state.get("max_rounds_extra", 0)) + 1
@@ -1410,7 +1444,7 @@ class Run:
             self.log(f"plain-build: red, fix round {rnd + 1}/{rounds}")
             head = self.git("rev-parse", "HEAD")
             self.fix_round(rnd + 1, rep)
-            self.commit(f"forge(plain-fix{rnd + 1})")
+            self.format_commit(f"forge(plain-fix{rnd + 1})")
             self.state["plain_round"] = rnd + 1
             self.save()
             if self.git("rev-parse", "HEAD") == head and not self.state.get("stuck_escalated"):
@@ -1420,7 +1454,7 @@ class Run:
                 self.save()
                 self.log(f"plain-fix{rnd + 1}: no change to the tree - one escalation round in a fresh session")
                 self.fix_round(rnd + 1, rep, escalate=True)
-                self.commit(f"forge(plain-fix{rnd + 1}-esc)")
+                self.format_commit(f"forge(plain-fix{rnd + 1}-esc)")
             if self.git("rev-parse", "HEAD") == head:
                 self.log(f"plain-fix{rnd + 1}: no change to the tree - stuck, needs a human (see .forge/disputes.md)")
                 if self.check()["done"]:

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.8
+- plain build/fix sessions default to `sonnet` when the main model is opus/fable (profile `model_build: opus` opts out); `model_tests` / `--model-tests` pick the model of the test turns.
+- Prompt cache: `cache_ttl` (profile) / `POWERPUFF_CACHE_TTL` env; default 5m (`FORCE_PROMPT_CACHING_5M`), `1h` opts into the long cache.
+- Prompts carry a batching rule: independent tool calls in one message, each file read once.
+- queue: `parallel` defaults to 3 (env `POWERPUFF_PARALLEL` changes it; queue key and `--parallel` win). Deps, shared files and the rate throttle still gate the slots.
+- Driver-side formatting: after every plain build/fix session the driver runs `format_fix` itself and commits the result; `dotnet format` is scoped with `--include <files changed by the unit>` (skipped when no source file changed), the same scoping applies to `dotnet format --verify-no-changes` gates. The prompts no longer tell the model to run the formatter.
+- Warm worktree pool: finished/failed unit worktrees go to `<repo>/.powerpuff/pool/` (max 6) and are reused by the next unit (branch reset to the integration tip, everything but `bin/ obj/ node_modules/ .venv/ TestResults/` cleaned, so builds are incremental). Opt out: `worktree_pool: off` (queue/profile) or `POWERPUFF_POOL=0`. The integration worktree is not pooled.
+
 ## 0.3.7
 - advisor: user-level default `POWERPUFF_ADVISOR` (env) for forge_run build/fix and prepare_run sessions; order: `--advisor` / queue `advisor` > profile `advisor` (`off` disables) > env. Enables the advisor in repos whose tracked `powerpuff.yaml` should not change.
 

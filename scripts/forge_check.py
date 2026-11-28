@@ -78,6 +78,20 @@ def expand(cmd: str, context: dict[str, str] | None) -> str:
     return re.sub(r"\{(base|root|plugin)\}", lambda m: ctx.get(m.group(1), m.group(0)), cmd)
 
 
+FORMAT_EXTS = (".cs", ".vb", ".fs")  # sources `dotnet format` handles; project files alone need no formatting pass
+
+
+def scope_format(cmd: str, changed: list[str]) -> str | None:
+    """`dotnet format ...` without --include gets `--include <changed source files>` (quoted); None = nothing to
+    format, skip. Any other command (or one that already has --include) is returned as is."""
+    if not re.match(r"\s*dotnet\s+format\b", cmd) or "--include" in cmd:
+        return cmd
+    src = [f for f in changed if f.lower().endswith(FORMAT_EXTS)]
+    if not src:
+        return None
+    return cmd + " --include " + " ".join(f'"{f}"' for f in src)
+
+
 def context_env(context: dict[str, str] | None) -> dict[str, str] | None:
     """Gate environment: the POWERPUFF_* context plus UTF-8 stdio for Python tools (lizard, diff_gates), which
     otherwise crash with UnicodeEncodeError on a cp1252 Windows console when a path or message is non-ASCII."""
@@ -89,10 +103,12 @@ def context_env(context: dict[str, str] | None) -> dict[str, str] | None:
 
 
 def check_gates(root: Path, timeout: int, gates: dict | None = None, context: dict[str, str] | None = None,
-                tail_chars: int = 600) -> dict:
+                tail_chars: int = 600, changed: list[str] | None = None) -> dict:
     """Runs the gate commands; `gates` (id -> command) wins over .forge/state.json. A missing tool is a failure.
     `context` (see gate_context) fills {base}/{root}/{plugin} in the commands and is exported as POWERPUFF_BASE/_ROOT/
-    _PLUGIN. Every result also has `exit_code` (null: tool missing or timeout) and `seconds` (wall time, 0.1)."""
+    _PLUGIN. Every result also has `exit_code` (null: tool missing or timeout) and `seconds` (wall time, 0.1).
+    `changed` (repo-relative files of the unit): a `dotnet format --verify-no-changes` gate is scoped to them
+    (see scope_format) and passes untouched when no source file changed."""
     state = root / ".forge" / "state.json"
     if gates is None:
         gates = (json.loads(state.read_text(encoding="utf-8")).get("gates") or {}) if state.is_file() else {}
@@ -100,8 +116,14 @@ def check_gates(root: Path, timeout: int, gates: dict | None = None, context: di
     env = context_env(context)
     for name, cmd in gates.items():
         t0 = time.monotonic()
+        run = expand(cmd, context)
+        if changed is not None and "--verify-no-changes" in run:
+            run = scope_format(run, changed)
+            if run is None:
+                results[name] = {"ok": True, "exit_code": 0, "tail": "", "seconds": 0.0}
+                continue
         try:
-            p = subprocess.run(expand(cmd, context), shell=True, cwd=root, capture_output=True, text=True,
+            p = subprocess.run(run, shell=True, cwd=root, capture_output=True, text=True,
                                timeout=timeout, encoding="utf-8", errors="replace", env=env)
             out = p.stdout + p.stderr
             results[name] = {"ok": p.returncode == 0, "exit_code": p.returncode,

@@ -63,13 +63,13 @@ def test_happy_path_tests_then_a_fresh_build_session(h: PH) -> None:
 
 
 def test_model_defaults_to_profile_then_opus(tmp_path: Path) -> None:
-    for sub, extra, want in (("a", "model: sonnet\n", "sonnet"), ("b", "", "opus")):
+    for sub, extra, want in (("a", "model: sonnet\n", {"sonnet"}), ("b", "", {"opus", "sonnet"})):
         (tmp_path / sub).mkdir()
         h = PH(tmp_path / sub, profile(extra=extra))
         env = {**os.environ, "PATH": str(h.bindir) + os.pathsep + os.environ["PATH"], "FAKE_CLAUDE_SCENARIO": str(h.scn)}
         cmd = [sys.executable, str(ROOT / "scripts" / "forge_run.py"), "Build foo", "--repo", str(h.repo), "--skip-base-check"]
         assert subprocess.run(cmd, cwd=h.tmp, env=env, capture_output=True).returncode == 0
-        assert {c["model"] for c in h.calls()} == {want}
+        assert {c["model"] for c in h.calls()} == want
 
 
 def test_no_profile_fails_before_any_session(tmp_path: Path) -> None:
@@ -426,3 +426,51 @@ def test_queue_rejects_unknown_engine(tmp_path: Path, monkeypatch: pytest.Monkey
     rc = queue_run.main([str(qh.queue([unit("U1")], engine="turbo")), "--repo", str(qh.repo)])
     assert rc == 3 and "engine must be one of" in capsys.readouterr().out
     assert os.environ.get("FAKE_STATE")
+
+
+def fake_dotnet(h: PH) -> Path:
+    log = h.tmp / "dotnet.log"
+    py = h.tmp / "fake_dotnet.py"
+    py.write_text("import json, sys\nopen(sys.argv[1], 'a').write(json.dumps(sys.argv[2:]) + chr(10))\n", encoding="utf-8")
+    (h.bindir / "dotnet.cmd").write_text(f'@"{sys.executable}" "{py}" "{log}" %*\r\n', encoding="ascii")
+    sh = h.bindir / "dotnet"
+    sh.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{py}" "{log}" "$@"\n', encoding="ascii")
+    sh.chmod(sh.stat().st_mode | 0o111)
+    return log
+
+
+def test_driver_formats_changed_sources_after_the_build(tmp_path: Path) -> None:
+    h = PH(tmp_path, profile(extra="test_gates: [unit]\nformat_fix: dotnet format sln.sln\n"))
+    log = fake_dotnet(h)
+    h.scenario({"pbuild": [{"base": True, "write": {"src/A.cs": "class A {}", "docs/x.md": "x"}}]})
+    r = h.run()
+    assert r.rc == 0, r.err
+    calls = [json.loads(x) for x in log.read_text(encoding="utf-8").splitlines()]
+    assert calls and calls[-1][:3] == ["format", "sln.sln", "--include"]
+    assert calls[-1][3:] == ["src/A.cs"]
+    p = h.of("pbuild")[0]["prompt"]
+    assert "Do not run the formatter (dotnet format sln.sln)" in p and "in fix mode" not in p
+
+
+def test_driver_format_is_skipped_without_changed_sources(tmp_path: Path) -> None:
+    h = PH(tmp_path, profile(extra="test_gates: [unit]\nformat_fix: dotnet format sln.sln\n"))
+    log = fake_dotnet(h)
+    assert h.run().rc == 0
+    assert not log.exists()
+
+
+def test_scope_format_only_touches_dotnet_format_without_include() -> None:
+    import forge_check
+    sf = forge_check.scope_format
+    assert sf("ruff format .", ["a.cs"]) == "ruff format ."
+    assert sf("dotnet format --include x.cs", ["a.cs"]) == "dotnet format --include x.cs"
+    assert sf("dotnet format", ["a b/A.cs", "n.md"]) == 'dotnet format --include "a b/A.cs"'
+    assert sf("dotnet format --verify-no-changes", ["n.md", "a.csproj"]) is None
+
+
+def test_verify_gate_is_scoped_and_passes_when_nothing_changed(tmp_path: Path) -> None:
+    import forge_check
+    cmd = {"fmt": 'python -c "import sys; sys.exit(1)" dotnet format --verify-no-changes'}
+    assert forge_check.check_gates(tmp_path, 30, cmd, None, changed=["n.md"])["results"]["fmt"]["ok"] is False
+    gates = {"fmt": "dotnet format --verify-no-changes"}
+    assert forge_check.check_gates(tmp_path, 30, gates, None, changed=["n.md"])["results"]["fmt"]["ok"] is True

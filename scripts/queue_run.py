@@ -6,7 +6,7 @@ branch); a failed or blocked unit never stops the run. State: <repo>/.powerpuff/
 Usage: python queue_run.py <queue.yaml> [--repo .] [--engine plain|forge] [--parallel N] [--no-wait] [--only U1,U2]
        [--dry-run] [--attended]
   --engine    forge_run engine of every unit; overrides queue.yaml `engine` (default plain)
-  --parallel  run up to N independent units at once (overrides queue.yaml `parallel`, default 1); fewer slots while the
+  --parallel  run up to N independent units at once (overrides queue.yaml `parallel`, default 3 or env POWERPUFF_PARALLEL); fewer slots while the
               account's 5-hour window is nearly used (rate-limit events of the sessions), none until a rejected window resets
   --no-wait   on a rate limit stop the run with exit 3 (state saved) instead of sleeping
   --max-outage-min  forge paused on an unreachable API (exit 3): wait 30 s, 60 s, ... <=15 min and rerun the unit;
@@ -46,6 +46,9 @@ ENGINES = ("plain", "forge")
 GOOD = ("merged", "done")
 EXCLUDES = (".powerpuff/", ".forge/", ".forge-unit-spec.md")
 PARALLEL_ENV = {"MSBUILDDISABLENODEREUSE": "1", "DOTNET_CLI_USE_MSBUILD_SERVER": "0"}  # worktrees must not share build nodes
+DEFAULT_PARALLEL = 3
+POOL_MAX = 6
+POOL_KEEP = ("bin/", "obj/", "node_modules/", ".venv/", "TestResults/")  # build outputs a pooled worktree keeps
 RATE_FRESH_S = 900
 IDENT = ["-c", "user.name=powerpuff", "-c", "user.email=powerpuff@local"]
 sleep = time.sleep
@@ -62,6 +65,50 @@ def now_iso() -> str:
 
 def posix(p: Path | str) -> str:
     return str(p).replace(chr(92), "/")
+
+
+def default_parallel() -> int:
+    """Units at once when neither queue.yaml nor --parallel say: env POWERPUFF_PARALLEL, else 3."""
+    try:
+        n = int(os.environ.get("POWERPUFF_PARALLEL") or DEFAULT_PARALLEL)
+    except ValueError:
+        return DEFAULT_PARALLEL
+    return n if n >= 1 else DEFAULT_PARALLEL
+
+
+def pool_off(v: object) -> bool:
+    return v is False or str(v).strip().lower() in ("off", "false", "no", "0")
+
+
+class FileLock:
+    """Cross-process lock: an exclusively created file; a lock older than `stale` seconds is taken over."""
+
+    def __init__(self, path: Path, timeout: float = 30.0, stale: float = 60.0):
+        self.path, self.timeout, self.stale = path, timeout, stale
+
+    def __enter__(self) -> "FileLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        end = time.monotonic() + self.timeout
+        while True:
+            try:
+                os.close(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return self
+            except FileExistsError:
+                try:
+                    if time.time() - self.path.stat().st_mtime > self.stale:
+                        self.path.unlink()
+                        continue
+                except OSError:
+                    continue
+                if time.monotonic() > end:
+                    raise TimeoutError(f"cannot lock {self.path}")
+                sleep(0.05)
+
+    def __exit__(self, *exc: object) -> None:
+        try:
+            self.path.unlink()
+        except OSError:
+            pass
 
 
 def load_queue(path: Path) -> dict:
@@ -125,7 +172,7 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
         errs.append(f"budget.unit_usd has an invalid value: {unit_usd!r}")
         unit_usd = None
     ints = {}
-    for k, d in (("max_attempts", 2), ("parallel", 1)):
+    for k, d in (("max_attempts", 2), ("parallel", default_parallel())):
         v = q.get(k, d)
         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
             errs.append(f"{k} must be an integer >= 1")
@@ -223,7 +270,7 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
            "model_fix": str(q["model_fix"]) if q.get("model_fix") else None, "unit_usd": unit_usd,
            "advisor": str(q["advisor"]) if q.get("advisor") is not None else None,
            "already_merged": already, "auto_merge": auto, "assume_defaults": assume, "engine": engine, "units": units,
-           "final": final, "shared": shared_path, **nums, **ints}
+           "final": final, "shared": shared_path, "worktree_pool": q.get("worktree_pool"), **nums, **ints}
     return cfg, errs
 
 
@@ -408,11 +455,85 @@ class Queue:
         with self.lock:
             return self._prepare_worktree(uid)
 
+    # ---- warm worktree pool: finished unit worktrees keep their build outputs (bin/ obj/) for the next unit ----
+    def pool_dir(self) -> Path:
+        return self.repo / ".powerpuff" / "pool"
+
+    def pool_enabled(self) -> bool:
+        if os.environ.get("POWERPUFF_POOL", "").strip() == "0":
+            return False
+        if self.cfg.get("worktree_pool") is not None:
+            return not pool_off(self.cfg["worktree_pool"])
+        try:
+            prof = forge_run.load_profile(self.repo)
+        except ValueError:
+            prof = None
+        return not (prof and "worktree_pool" in prof["config"] and pool_off(prof["config"]["worktree_pool"]))
+
+    def pool_read(self) -> list[str]:
+        try:
+            data = json.loads((self.pool_dir() / "pool.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [p for p in data if isinstance(p, str)] if isinstance(data, list) else []
+
+    def pool_write(self, items: list[str]) -> None:
+        (self.pool_dir() / "pool.json").write_text(json.dumps(items), encoding="utf-8")
+
+    def drop_worktree(self, wt: Path) -> None:
+        git(self.repo, "worktree", "remove", "--force", str(wt))
+        shutil.rmtree(wt, ignore_errors=True)
+        git(self.repo, "worktree", "prune")
+
+    def release_worktree(self, wt: Path) -> None:
+        """A finished / failed unit worktree goes to the pool (at most POOL_MAX, the oldest are removed for real)."""
+        if not self.pool_enabled() or not (wt / ".git").exists():
+            return self.drop_worktree(wt)
+        try:
+            with FileLock(self.pool_dir() / "pool.lock"):
+                items = [p for p in self.pool_read() if (Path(p) / ".git").exists()]
+                n = 1 + max([int(Path(p).name) for p in items if Path(p).name.isdigit()] or [0])
+                dest = self.pool_dir() / str(n)
+                if git(wt, "checkout", "-q", "--detach").returncode != 0 \
+                        or git(self.repo, "worktree", "move", str(wt), str(dest)).returncode != 0:
+                    return self.drop_worktree(wt)
+                items.append(str(dest))
+                for old in items[:-POOL_MAX]:
+                    self.drop_worktree(Path(old))
+                self.pool_write(items[-POOL_MAX:])
+        except (OSError, TimeoutError):
+            self.drop_worktree(wt)
+
+    def take_pooled(self, wt: Path, br: str, exists: bool) -> bool:
+        """Move a warm worktree to `wt` with `br` checked out (cut from the integration tip when new); False = fall back."""
+        if not self.pool_enabled():
+            return False
+        try:
+            with FileLock(self.pool_dir() / "pool.lock"):
+                items = [p for p in self.pool_read() if (Path(p) / ".git").exists()]
+                if not items:
+                    return False
+                entry = items.pop()
+                self.pool_write(items)
+        except (OSError, TimeoutError):
+            return False
+        args = ["checkout", "-f", br] if exists else ["checkout", "-f", "-B", br, self.cfg["integration_branch"]]
+        ok = git(entry, *args).returncode == 0 and git(entry, "clean", "-ffdx", *[a for k in POOL_KEEP for a in ("-e", k)]) \
+            .returncode == 0
+        if ok:
+            wt.parent.mkdir(parents=True, exist_ok=True)
+            ok = git(self.repo, "worktree", "move", entry, str(wt)).returncode == 0
+        if not ok:
+            self.drop_worktree(Path(entry))
+        return ok
+
     def _prepare_worktree(self, uid: str) -> Path:
         wt = self.wt_path(uid)
         if not (wt / ".git").exists():
             git(self.repo, "worktree", "prune")
             br = self.branch(uid)
+            if self.take_pooled(wt, br, git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{br}").returncode == 0):
+                return wt
             if git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{br}").returncode == 0:
                 r = git(self.repo, "worktree", "add", str(wt), br)
             else:
@@ -687,9 +808,7 @@ class Queue:
         self.save()
         br = self.branch(uid)
         with self.lock:
-            git(self.repo, "worktree", "remove", "--force", str(wt))
-            shutil.rmtree(wt, ignore_errors=True)
-            git(self.repo, "worktree", "prune")
+            self.release_worktree(wt)
             git(self.repo, "branch", "-D", br)
         self.say(f"{uid} {why}: waiting for a new integration tip ({n + 1}/{self.RED_BASE_WAITS})")
         waited = 0
@@ -725,9 +844,7 @@ class Queue:
         self.snapshot(uid, wt, f"{uid}.attempt{done}")
         self.save()  # the next attempt gets a new branch and worktree name (suffix -a<n>); the old ones go best-effort
         with self.lock:
-            git(self.repo, "worktree", "remove", "--force", str(wt))
-            shutil.rmtree(wt, ignore_errors=True)
-            git(self.repo, "worktree", "prune")
+            self.release_worktree(wt)
         return True
 
     def finish_ok(self, uid: str) -> None:
@@ -768,9 +885,7 @@ class Queue:
         wt = self.wt_path(uid)
         self.snapshot(uid, wt)
         with self.lock:
-            git(self.repo, "worktree", "remove", "--force", str(wt))
-            shutil.rmtree(wt, ignore_errors=True)
-            git(self.repo, "worktree", "prune")
+            self.release_worktree(wt)
 
     # ---- final contour ----------------------------------------------------------------------------
     def final_commands(self) -> tuple[dict[str, str], str, str]:

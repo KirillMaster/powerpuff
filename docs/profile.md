@@ -18,6 +18,9 @@ The profile lives in the project repository and is approved by a human. The core
 | `test_gates` | list of ids | which gates check "red on base"; without the key — ids containing `test` | `forge_run` |
 | `test_infra` | list of globs | manifests the test writer may change | `forge_run` |
 | `advisor` | string | Claude Code advisor model (`fable` / `opus` / `sonnet` / full id; `off`) for plain build and fix sessions, passed as `--settings` `advisorModel`; pair it with a cheaper `model_build` / `model_fix`. Without the key: user env `POWERPUFF_ADVISOR` | `forge_run` |
+| `model_tests` | string | model of the plain test-writing turns (`--model-tests`); default: the main model | `forge_run` |
+| `cache_ttl` | string | prompt-cache TTL of the sessions: `5m` (default, `FORCE_PROMPT_CACHING_5M`) or `1h`; without the key: env `POWERPUFF_CACHE_TTL` | `forge_run` |
+| `worktree_pool` | string | `off` removes finished unit worktrees instead of keeping them in `.powerpuff/pool/` for build-output reuse; env `POWERPUFF_POOL=0` does the same | `queue_run` |
 | `diff_gates` | map | thresholds for `diff_gates.py all` | `diff_gates` |
 | `hooks` | — | not a key: the plugin hooks (`hooks/hooks.json`) take `gates.iteration` and `protected` from the profile | `hook_stop`, `hook_protect` |
 
