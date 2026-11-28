@@ -53,7 +53,7 @@ units:
 | `model_build` / `model_fix` | `model` / `model_build` | plain engine: model for the implementation turn and for fix rounds (`--model-build` / `--model-fix`); the last fix round is escalated to `model`. Without the key — `model_build`/`model_fix` from `powerpuff.yaml` |
 | `advisor` | none (profile `advisor`) | plain engine: advisor model of build/fix sessions (`--advisor`); `off` disables a profile advisor |
 | `parallel` | 3 | how many independent units run at once (`--parallel N` overrides; env `POWERPUFF_PARALLEL` changes the default; deps, shared files and the rate throttle still gate it) |
-| `worktree_pool` | on | `off` (or env `POWERPUFF_POOL=0`, or profile `worktree_pool: off`) removes finished unit worktrees instead of keeping them in `<repo>/.powerpuff/pool/` (max 6) to reuse their `bin/` / `obj/` build outputs |
+| `worktree_pool` | on | `off` (or env `POWERPUFF_POOL=0`, or profile `worktree_pool: off`) removes finished unit worktrees instead of keeping them in place, registered in `<repo>/.powerpuff/pool/pool.json` (max 6), to reuse their `bin/` / `obj/` build outputs |
 | `max_attempts` | 2 | total runs per unit; the next one starts from a fresh branch, with the reason for the previous failure and its `disputes.md` in the spec |
 | `already_merged` | `[]` | ids of units already merged into `base` (continuing a previous run): immediately `merged` |
 | `auto_merge` | `[]` | risk levels that merge without a human |
@@ -89,7 +89,7 @@ Duplicate id, unknown dependency, cycle, invalid `risk`, no spec text, overlappi
 | Other code | one retry (forge continues from where it stopped), then `failed` |
 | Dependency `failed`/`blocked`/`skipped-budget`/`done` | the unit is `blocked`, independent ones continue |
 
-The user's working copy is not touched: merges go into a separate worktree `wt/_integration`, HEAD does not move. Worktrees of merged units are deleted (branches and the `.forge` copy stay), the rest wait for the audit.
+The user's working copy is not touched: merges go into a separate worktree `wt/_integration`, HEAD does not move. Worktrees of merged units go to the warm pool (or are deleted with `worktree_pool: off`; branches and the `.forge` copy stay); a unit may run in a pooled tree of an earlier unit, `state.json` `worktree` has the real path, the rest wait for the audit.
 
 ## Budget
 - Unit limit: `budget.unit_usd`, otherwise `min(remainder, max_usd * (1 - fix_reserve) / number_of_units * 2)`.

@@ -486,54 +486,76 @@ class Queue:
         git(self.repo, "worktree", "prune")
 
     def release_worktree(self, wt: Path) -> None:
-        """A finished / failed unit worktree goes to the pool (at most POOL_MAX, the oldest are removed for real)."""
+        """A finished / failed unit worktree goes to the pool IN PLACE (at most POOL_MAX, the oldest are removed for
+        real). Never `git worktree move`: MSBuild/npm caches hold absolute paths, a moved tree recompiles from scratch."""
+        for v in self.st.get("units", {}).values():
+            if v.get("wt_live") and Path(v["wt_live"]) == wt:
+                v.pop("wt_live", None)
         if not self.pool_enabled() or not (wt / ".git").exists():
             return self.drop_worktree(wt)
         try:
             with FileLock(self.pool_dir() / "pool.lock"):
-                items = [p for p in self.pool_read() if (Path(p) / ".git").exists()]
-                n = 1 + max([int(Path(p).name) for p in items if Path(p).name.isdigit()] or [0])
-                dest = self.pool_dir() / str(n)
-                if git(wt, "checkout", "-q", "--detach").returncode != 0 \
-                        or git(self.repo, "worktree", "move", str(wt), str(dest)).returncode != 0:
+                items = [p for p in self.pool_read() if (Path(p) / ".git").exists() and Path(p) != wt]
+                if git(wt, "checkout", "-q", "--detach").returncode != 0:
                     return self.drop_worktree(wt)
-                items.append(str(dest))
+                items.append(str(wt))
                 for old in items[:-POOL_MAX]:
                     self.drop_worktree(Path(old))
                 self.pool_write(items[-POOL_MAX:])
         except (OSError, TimeoutError):
             self.drop_worktree(wt)
 
-    def take_pooled(self, wt: Path, br: str, exists: bool) -> bool:
-        """Move a warm worktree to `wt` with `br` checked out (cut from the integration tip when new); False = fall back."""
+    def take_pooled(self, br: str, exists: bool, prefer: Path | None = None) -> Path | None:
+        """A warm worktree, reset in place to `br` (cut from the integration tip when new); None = fall back."""
         if not self.pool_enabled():
-            return False
+            return None
         try:
             with FileLock(self.pool_dir() / "pool.lock"):
                 items = [p for p in self.pool_read() if (Path(p) / ".git").exists()]
                 if not items:
-                    return False
-                entry = items.pop()
+                    self.pool_write(items)
+                    return None
+                entry = str(prefer) if prefer is not None and str(prefer) in items else items[-1]
+                items.remove(entry)
                 self.pool_write(items)
         except (OSError, TimeoutError):
-            return False
+            return None
         args = ["checkout", "-f", br] if exists else ["checkout", "-f", "-B", br, self.cfg["integration_branch"]]
         ok = git(entry, *args).returncode == 0 and git(entry, "clean", "-ffdx", *[a for k in POOL_KEEP for a in ("-e", k)]) \
             .returncode == 0
-        if ok:
-            wt.parent.mkdir(parents=True, exist_ok=True)
-            ok = git(self.repo, "worktree", "move", entry, str(wt)).returncode == 0
         if not ok:
             self.drop_worktree(Path(entry))
-        return ok
+            return None
+        return Path(entry)
+
+    def live_wt(self, uid: str) -> Path:
+        """The unit's current worktree: a pooled tree keeps its own path, else the default per-unit path."""
+        live = self.st.get("units", {}).get(uid, {}).get("wt_live")
+        return Path(live) if live and (Path(live) / ".git").exists() else self.wt_path(uid)
 
     def _prepare_worktree(self, uid: str) -> Path:
+        v = self.st.setdefault("units", {}).setdefault(uid, {})
+        live = v.get("wt_live")
+        if live and (Path(live) / ".git").exists() \
+                and git(Path(live), "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == self.branch(uid):
+            return Path(live)
         wt = self.wt_path(uid)
+        if (wt / ".git").exists() and str(wt) in self.pool_read():
+            br = self.branch(uid)
+            pooled = self.take_pooled(br, git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{br}").returncode == 0,
+                                      prefer=wt)
+            if pooled:
+                v["wt_live"] = str(pooled)
+                self.save()
+                return pooled
         if not (wt / ".git").exists():
             git(self.repo, "worktree", "prune")
             br = self.branch(uid)
-            if self.take_pooled(wt, br, git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{br}").returncode == 0):
-                return wt
+            pooled = self.take_pooled(br, git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{br}").returncode == 0)
+            if pooled:
+                v["wt_live"] = str(pooled)
+                self.save()
+                return pooled
             if git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{br}").returncode == 0:
                 r = git(self.repo, "worktree", "add", str(wt), br)
             else:
@@ -882,7 +904,7 @@ class Queue:
             shutil.copytree(src, dst, ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
 
     def cleanup(self, uid: str) -> None:
-        wt = self.wt_path(uid)
+        wt = self.live_wt(uid)
         self.snapshot(uid, wt)
         with self.lock:
             self.release_worktree(wt)

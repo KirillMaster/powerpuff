@@ -74,9 +74,10 @@ def test_pooled_worktree_keeps_build_outputs_but_nothing_else(tmp_path: Path) ->
     (wt1 / "junk.txt").write_text("x", encoding="utf-8")
     (wt1 / "README.md").write_text("changed\n", encoding="utf-8")
     q.release_worktree(wt1)
-    assert not wt1.exists() and len(pool_items(q)) == 1
+    assert wt1.exists() and pool_items(q) == [str(wt1)]
     wt2 = q.prepare_worktree("U2")
-    assert wt2 == q.wt_path("U2") and (wt2 / ".git").exists() and pool_items(q) == []
+    assert wt2 == wt1 and q.live_wt("U2") == wt1 and (wt2 / ".git").exists() and pool_items(q) == []
+    assert q.prepare_worktree("U2") == wt1
     assert (wt2 / "bin" / "x.dll").read_text(encoding="utf-8") == "built"
     assert not (wt2 / ".forge").exists() and not (wt2 / "junk.txt").exists()
     assert (wt2 / "README.md").read_text(encoding="utf-8") == "hello\n"
@@ -103,7 +104,8 @@ def test_released_branch_can_be_deleted_and_recreated(tmp_path: Path) -> None:
     br = q.branch("U1")
     q.release_worktree(wt1)
     g(q.repo, "branch", "-D", br)
-    assert q.prepare_worktree("U1") == wt1
+    wt = q.prepare_worktree("U1")
+    assert wt == wt1 and g(wt, "rev-parse", "--abbrev-ref", "HEAD") == br
 
 
 def test_fallback_to_a_fresh_worktree_on_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,7 +114,7 @@ def test_fallback_to_a_fresh_worktree_on_error(tmp_path: Path, monkeypatch: pyte
     real = queue_run.git
 
     def flaky(cwd: Path | str, *args: str) -> subprocess.CompletedProcess:
-        if args[:2] == ("worktree", "move"):
+        if args[:1] == ("clean",):
             return subprocess.CompletedProcess(args, 1, "", "boom")
         return real(cwd, *args)
 
@@ -141,6 +143,21 @@ def test_pool_opt_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, how: str)
     assert not wt.exists() and pool_items(q) == []
 
 
+def test_pooled_tree_is_never_moved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    q = make_queue(tmp_path)
+    real = queue_run.git
+    calls: list[tuple[str, ...]] = []
+
+    def spy(cwd: Path | str, *args: str) -> subprocess.CompletedProcess:
+        calls.append(args)
+        return real(cwd, *args)
+
+    monkeypatch.setattr(queue_run, "git", spy)
+    q.release_worktree(q.prepare_worktree("U1"))
+    q.prepare_worktree("U2")
+    assert not [c for c in calls if c[:2] == ("worktree", "move")]
+
+
 def test_pool_is_capped_and_oldest_removed_for_real(tmp_path: Path) -> None:
     q = make_queue(tmp_path)
     q.cfg["units"] += [{"id": f"X{i}"} for i in range(8)]
@@ -149,4 +166,4 @@ def test_pool_is_capped_and_oldest_removed_for_real(tmp_path: Path) -> None:
         q.release_worktree(w)
     items = pool_items(q)
     assert len(items) == queue_run.POOL_MAX and all((Path(p) / ".git").exists() for p in items)
-    assert len([d for d in q.pool_dir().iterdir() if d.is_dir()]) == queue_run.POOL_MAX
+    assert items == [str(w) for w in wts[-queue_run.POOL_MAX:]] and not any(w.exists() for w in wts[:-queue_run.POOL_MAX])
