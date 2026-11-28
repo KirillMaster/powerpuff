@@ -154,6 +154,20 @@ def advisor_off(value: object) -> bool:
     return not value or str(value).strip().lower() in ("off", "none", "false", "no")
 
 
+DEFAULT_BUILD_MODEL = "sonnet"
+
+
+def cache_env(ttl: object) -> dict[str, str]:
+    """Prompt-cache TTL of a `claude -p` session: `5m` (default; unattended sessions are short and continuous, a 1h
+    cache write costs 1.6x a 5m one) or `1h`."""
+    env = {k: v for k, v in os.environ.items() if k not in ("FORCE_PROMPT_CACHING_5M", "ENABLE_PROMPT_CACHING_1H")}
+    if str(ttl or "5m").strip().lower() == "1h":
+        env["ENABLE_PROMPT_CACHING_1H"] = "1"
+    else:
+        env["FORCE_PROMPT_CACHING_5M"] = "1"
+    return env
+
+
 def advisor_settings(advisor: str | None, where: Path) -> list[str]:
     """`--settings <file>` that turns the Claude Code advisor on for one `claude -p` session (a file, not inline JSON:
     the Windows driver runs through cmd.exe)."""
@@ -190,6 +204,9 @@ Changes so far (`git diff --stat START_SHA`):
 DIFFSTAT
 Gates (all must exit 0; formatter in fix mode first: FORMAT_FIX):
 GATES
+Work in few turns: put independent tool calls (reads of different files, searches, independent commands) in ONE
+message so they run in parallel; read each file once (by ranges if large); do not re-run a check that already passed
+on an unchanged tree.
 """
 
 PLAIN_TESTS = """Turn 1 of 2 of an unattended build (the spec follows). Do NOT write production code in this turn.
@@ -208,6 +225,9 @@ Before coding:
     the behaviour is missing (an assertion or a missing entry point, not a syntax or collection error). A test that
     already passes asserts nothing new: tighten it (exact values from the spec) until it fails. The driver checks
     this too and a vacuous suite costs another round.
+Work in few turns: put independent tool calls (reads of different files, searches, independent commands) in ONE
+message so they run in parallel; read each file once (by ranges if large); do not re-run a check that already passed
+on an unchanged tree.
 Then stop: no production code. Finish with one line: TESTS: done
 
 SPEC:
@@ -230,6 +250,7 @@ Rules:
   `.forge/disputes.md` and implement the spec.
 - Follow existing conventions; no unrelated refactors; never weaken a gate (no disabled rules, no skipped tests, no
   config edits).
+- Work in few turns: put independent tool calls (reads of different files, searches, independent commands) in ONE message so they run in parallel; read each file once (by ranges if large); do not re-run a check that already passed on an unchanged tree.
 - Before finishing run the formatter in fix mode (FORMAT_FIX) and then every gate until all exit 0:
 GATES
 Finish with one line: BUILD: done"""
@@ -489,7 +510,7 @@ class Run:
                  f"{f', advisor {advisor}' if adv else ''})")
         proc = subprocess.Popen(argv, cwd=self.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-                                shell=sys.platform == "win32", env={**os.environ, "POWERPUFF_DRIVER": "1"})
+                                shell=sys.platform == "win32", env={**cache_env(self.cache_ttl()), "POWERPUFF_DRIVER": "1"})
         assert proc.stdin and proc.stdout
         proc.stdin.write(prompt)
         proc.stdin.close()
@@ -1213,7 +1234,7 @@ class Run:
     # ---- plain engine -----------------------------------------------------------------------------
     def plain_turn(self, stage: str, prompt: str, done=lambda: True) -> dict:  # noqa: B008
         """One turn in the single model context: resumes `sid_plain`, remembers the session id of the answer."""
-        out = self.staged(stage, self.state["writer"], prompt, done, resume=self.state.get("sid_plain"))
+        out = self.staged(stage, self.model_for("tests"), prompt, done, resume=self.state.get("sid_plain"))
         if out.get("session_id"):
             self.state["sid_plain"] = out["session_id"]
             self.save()
@@ -1322,15 +1343,25 @@ class Run:
         return "The spec is in `.forge/spec.md`: read it first, then the files it points to as needed."
 
     def model_for(self, step: str) -> str:
-        """plain engine: `build` / `fix` model = CLI, else profile `model_build` / `model_fix`, else build -> the main
-        model and fix -> the build model."""
+        """plain engine: `tests` / `build` / `fix` model = CLI, else profile `model_tests` / `model_build` / `model_fix`,
+        else tests -> the main model, build -> sonnet (the main model when it is not opus/fable), fix -> the build
+        model."""
         cli = getattr(self.a, f"model_{step}", None)
         prof = (self.profile or {}).get(f"model_{step}")
         if cli:
             return str(cli)
         if isinstance(prof, str) and prof.strip():
             return prof.strip()
-        return self.model_for("build") if step == "fix" else self.state["writer"]
+        if step == "fix":
+            return self.model_for("build")
+        main = self.state["writer"]
+        if step == "build" and any(m in main.lower() for m in ("opus", "fable")):
+            return DEFAULT_BUILD_MODEL
+        return main
+
+    def cache_ttl(self) -> str:
+        """Prompt-cache TTL: profile `cache_ttl`, else env `POWERPUFF_CACHE_TTL`, else 5m."""
+        return str((self.profile or {}).get("cache_ttl") or os.environ.get("POWERPUFF_CACHE_TTL") or "5m")
 
     def advisor(self) -> str | None:
         """plain engine build/fix sessions: advisor model = CLI `--advisor`, else profile `advisor`, else the
@@ -1607,8 +1638,10 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="strong model, default opus (plain: also writes tests and code; "
                                                    "then the profile's `model` is the default)")
     ap.add_argument("--writer", default="sonnet", help="model that writes acceptance tests and code")
-    ap.add_argument("--model-build", default=None, help="plain: model of the build turn (default: profile `model_build`, "
+    ap.add_argument("--model-tests", default=None, help="plain: model of the test turns (default: profile `model_tests`, "
                                                          "else --model)")
+    ap.add_argument("--model-build", default=None, help="plain: model of the build turn (default: profile `model_build`, "
+                                                         "else sonnet when --model is opus/fable, else --model)")
     ap.add_argument("--model-fix", default=None, help="plain: model of fix rounds (default: profile `model_fix`, else "
                                                        "the build model); the last round escalates to --model")
     ap.add_argument("--advisor", default=None, help="plain: advisor model of build/fix sessions (fable|opus|sonnet|off; "

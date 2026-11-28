@@ -218,6 +218,7 @@ def normalize(q: dict, qfile: Path, repo: Path) -> tuple[dict, list[str]]:
                                 f"the other")
     cfg = {"run_id": run_id, "base": str(q.get("base") or "HEAD"), "integration_branch": ib,
            "model": str(q.get("model") or "opus"), "writer": str(q.get("writer") or "sonnet"),
+           "model_tests": str(q["model_tests"]) if q.get("model_tests") else None,
            "model_build": str(q["model_build"]) if q.get("model_build") else None,
            "model_fix": str(q["model_fix"]) if q.get("model_fix") else None, "unit_usd": unit_usd,
            "advisor": str(q["advisor"]) if q.get("advisor") is not None else None,
@@ -507,6 +508,7 @@ class Queue:
     def forge_cmd(self, spec: Path, wt: Path, cap: float) -> list[str]:
         hours = max(self.remaining_s(), 60) / 3600
         extra = [*(["--assume-defaults"] if self.cfg.get("assume_defaults") else []),
+                 *(["--model-tests", self.cfg["model_tests"]] if self.cfg.get("model_tests") else []),
                  *(["--model-build", self.cfg["model_build"]] if self.cfg.get("model_build") else []),
                  *(["--model-fix", self.cfg["model_fix"]] if self.cfg.get("model_fix") else []),
                  *(["--advisor", self.cfg["advisor"]] if self.cfg.get("advisor") else []),
@@ -1042,7 +1044,8 @@ def main(argv: list[str] | None = None) -> int:
         first_pass, cap = caps(cfg, len(q.selected))
         print(f"queue: dry-run run_id={cfg['run_id']} base={cfg['base']} integration={cfg['integration_branch']}")
         print(f"queue: parallel={cfg['parallel']} max_attempts={cfg['max_attempts']} model={cfg['model']} "
-              f"model_build={cfg['model_build'] or cfg['model']} model_fix={cfg['model_fix'] or cfg['model_build'] or cfg['model']} "
+              f"model_tests={cfg.get('model_tests') or cfg['model']} model_build={cfg['model_build'] or 'default'} "
+              f"model_fix={cfg['model_fix'] or cfg['model_build'] or 'default'} "
               f"advisor={cfg.get('advisor') or 'profile'}")
         print(f"queue: budget max_usd={cfg['max_usd']} max_hours={cfg['max_hours']} fix_reserve={cfg['fix_reserve']} "
               f"first_pass=${first_pass:.2f} reserve=${cfg['max_usd'] - first_pass:.2f} unit_cap=${cap:.2f}")

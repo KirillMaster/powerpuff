@@ -93,7 +93,9 @@ def main() -> int:
     log = Path(os.environ.get("FAKE_CLAUDE_LOG") or str(scn_path) + ".calls.jsonl")
     with open(log, "a", encoding="utf-8") as f:
         f.write(json.dumps({"n": n, "stage": stage, "index": idx, "model": model, "has_resume": resume is not None,
-                            "resume": resume, "session_id": sid, "prompt": prompt, "advisor": advisor}) + "\n")
+                            "resume": resume, "session_id": sid, "prompt": prompt, "advisor": advisor,
+                            "cache_5m": os.environ.get("FORCE_PROMPT_CACHING_5M"),
+                            "cache_1h": os.environ.get("ENABLE_PROMPT_CACHING_1H")}) + "\n")
 
     if entry.get("kill_driver"):
         pidfile = Path(os.environ["FAKE_CLAUDE_PIDFILE"])

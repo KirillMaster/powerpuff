@@ -226,3 +226,46 @@ def test_queue_passes_build_and_fix_models(tmp_path: Path, monkeypatch: pytest.M
 def test_unit_usd_caps_every_unit(tmp_path: Path) -> None:
     cfg = {"max_usd": 1000.0, "fix_reserve": 0.33, "unit_usd": 25}
     assert queue_run.caps(cfg, 64)[1] == 25
+
+
+# ---- 0.3.8: default build model, model_tests, cache TTL, batching rule ----------------------------
+def mk(p: Path) -> Path:
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def test_build_and_fix_default_to_sonnet_under_opus(tmp_path: Path) -> None:
+    h = PH(tmp_path)
+    h.scenario({"pbuild": [{"base": True, "write": BAD}], "fix": ["default"]})
+    assert h.run("Build foo", "--model", "opus").rc == 0
+    assert h.of("ptests")[0]["model"] == "opus"
+    assert h.of("pbuild")[0]["model"] == "sonnet" and h.of("fix")[0]["model"] == "sonnet"
+
+
+def test_profile_model_build_opus_opts_out(tmp_path: Path) -> None:
+    h = PH(tmp_path, profile(extra="test_gates: [unit]\nmodel_build: opus\n"))
+    assert h.run("Build foo", "--model", "opus").rc == 0
+    assert h.of("pbuild")[0]["model"] == "opus"
+
+
+def test_model_tests_cli_and_profile(tmp_path: Path) -> None:
+    h = PH(mk(tmp_path / "a"))
+    assert h.run("Build foo", "--model", "opus", "--model-tests", "sonnet").rc == 0
+    assert h.of("ptests")[0]["model"] == "sonnet"
+    h2 = PH(mk(tmp_path / "b"), profile(extra="test_gates: [unit]\nmodel_tests: haiku\n"))
+    assert h2.run().rc == 0
+    assert h2.of("ptests")[0]["model"] == "haiku"
+
+
+def test_sessions_use_5m_cache_by_default_and_1h_on_request(tmp_path: Path) -> None:
+    h = PH(mk(tmp_path / "a"))
+    assert h.run().rc == 0
+    assert all(c["cache_5m"] == "1" and not c["cache_1h"] for c in h.of("ptests") + h.of("pbuild"))
+    h2 = PH(mk(tmp_path / "b"), profile(extra="test_gates: [unit]\ncache_ttl: 1h\n"))
+    assert h2.run().rc == 0
+    assert all(c["cache_1h"] == "1" and not c["cache_5m"] for c in h2.of("ptests") + h2.of("pbuild"))
+
+
+def test_prompts_ask_for_batched_tool_calls(h: PH) -> None:
+    assert h.run().rc == 0
+    assert "in ONE" in h.of("ptests")[0]["prompt"] and "in ONE" in h.of("pbuild")[0]["prompt"]
